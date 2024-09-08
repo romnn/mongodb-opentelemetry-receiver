@@ -37,7 +37,7 @@ async fn main() -> eyre::Result<()> {
         .await?;
     println!("connected to {}", options.connection_uri);
 
-    mongodb_opentelemetry_receiver::scrape_metrics(&client).await?;
+    mongodb_opentelemetry_receiver::record_metrics(&client).await?;
 
     println!("completed in {:?}", start.elapsed());
 
