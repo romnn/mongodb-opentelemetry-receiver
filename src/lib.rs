@@ -7,7 +7,10 @@ pub mod otlp;
 pub mod prometheus;
 
 use color_eyre::eyre;
-use metrics::Record;
+use futures::{StreamExt, TryStreamExt};
+use metrics::{Record, StorageEngine};
+use mongodb::bson::spec::ElementType;
+use mongodb::Cursor;
 use mongodb::{bson, event::cmap::ConnectionCheckoutFailedReason, Client};
 use opentelemetry::{KeyValue, Value};
 use opentelemetry_sdk::metrics::data::{ResourceMetrics, ScopeMetrics};
@@ -16,28 +19,46 @@ use regex::Regex;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::time::{Instant, SystemTime};
+use tracing::{debug, trace, warn};
 
 pub const DEFAULT_PORT: u16 = 27017;
 
-lazy_static::lazy_static! {
-    static ref VERSION_REGEX: Regex = Regex::new(r"v?([0-9]+(\.[0-9]+)*?)(-([0-9]+[0-9A-Za-z\-~]*(\.[0-9A-Za-z\-~]+)*)|(-?([A-Za-z\-~]+[0-9A-Za-z\-~]*(\.[0-9A-Za-z\-~]+)*)))?(\+([0-9A-Za-z\-~]+(\.[0-9A-Za-z\-~]+)*))?").unwrap();
-}
+// lazy_static::lazy_static! {
+//     static ref VERSION_REGEX: Regex = Regex::new(r"v?([0-9]+(\.[0-9]+)*?)(-([0-9]+[0-9A-Za-z\-~]*(\.[0-9A-Za-z\-~]+)*)|(-?([A-Za-z\-~]+[0-9A-Za-z\-~]*(\.[0-9A-Za-z\-~]+)*)))?(\+([0-9A-Za-z\-~]+(\.[0-9A-Za-z\-~]+)*))?").unwrap();
+// }
 
 // regexp.MustCompile("^" + VersionRegexpRaw + "$")
 
-// trait EmptyAggregation {
-//     fn empty() -> Self;
-// }
-//
-// impl<T> EmptyAggregation for Sum<T> {
-//     fn empty() -> Self {
-//         Self {
-//             data_points: vec![],
-//             is_monotonic: false,
-//             temporality: Temporality::Cumulative,
-//         }
-//     }
-// }
+fn omit_values(mut value: bson::Bson, depth: usize) -> bson::Bson {
+    omit_values_visitor(&mut value, depth);
+    value
+}
+
+fn omit_values_visitor(value: &mut bson::Bson, depth: usize) {
+    match value {
+        bson::Bson::Document(value) => {
+            if depth <= 0 {
+                *value = bson::doc! {"omitted": true};
+            } else {
+                for (_, v) in value.iter_mut() {
+                    omit_values_visitor(v, depth - 1);
+                }
+            }
+        }
+        bson::Bson::Array(value) => {
+            if depth <= 0 {
+                *value = bson::Array::from_iter([bson::Bson::String("omitted".to_string())]);
+            } else {
+                for v in value.iter_mut() {
+                    omit_values_visitor(v, depth - 1);
+                }
+            }
+        }
+        value => {
+            // keep
+        }
+    };
+}
 
 // type metricMongodbCollectionCount struct {
 // 	data     pmetric.Metric // data buffer for generated metric.
@@ -83,18 +104,27 @@ lazy_static::lazy_static! {
 // 	return m
 // }
 
-#[derive(Debug, Deserialize)]
-struct Version {
-    pub version: String,
+// #[derive(Debug, Deserialize)]
+// struct Version {
+//     pub version: String,
+// }
+
+pub fn get_version(doc: &bson::Bson) -> eyre::Result<semver::Version> {
+    let version = get_str!(doc, "version")?;
+    let version = semver::Version::parse(version)?;
+    Ok(version)
 }
 
-pub async fn get_version(client: &Client) -> eyre::Result<String> {
+pub async fn query_version(client: &Client) -> eyre::Result<semver::Version> {
     let version = client
         .database("admin")
         .run_command(bson::doc! {"buildInfo": 1})
         .await?;
-    let version: Version = bson::from_document(version)?;
-    Ok(version.version)
+    let version = bson::from_document(version)?;
+    get_version(&version)
+
+    // let version: Version = bson::from_document(version)?;
+    // Ok(version.version)
 }
 
 pub fn get_server_address_and_port<'a>(
@@ -128,25 +158,16 @@ impl Metrics {
     }
 }
 
-#[derive(Debug)]
-pub struct MetricScraper {
-    metrics: Metrics,
-    start_time: SystemTime,
-}
-
 impl Metrics {
     pub fn record_admin_metrics(
         &mut self,
         server_status: &bson::Bson,
-        start_time: SystemTime,
-        time: SystemTime,
+        config: &metrics::Config,
         errors: &mut Vec<metrics::Error>,
     ) -> eyre::Result<()> {
-        let storageEngine = get_str!(server_status, "storageEngine", "name")?;
-        if storageEngine != "wiredTiger" {
+        if config.storage_engine != Some(StorageEngine::WiredTiger) {
             return Ok(());
         }
-        println!("storage engine: {storageEngine}");
 
         // dbg!(doc::get_path(
         //     server_status,
@@ -155,12 +176,9 @@ impl Metrics {
         //         attributes::ConnectionType::Available.as_str()
         //     )
         // ));
-        self.collection_count
-            .record(server_status, None, start_time, time, errors);
-        self.data_size
-            .record(server_status, None, start_time, time, errors);
-        self.connection_count
-            .record(server_status, None, start_time, time, errors);
+        self.collection_count.record(server_status, config, errors);
+        self.data_size.record(server_status, config, errors);
+        self.connection_count.record(server_status, config, errors);
 
         // let mut collection_count = metrics::CollectionCount::new();
         // collection_count.record(server_status);
@@ -350,18 +368,75 @@ impl ResourceAttributesConfig {
     }
 }
 
+/// IndexStats returns the index stats per collection for a given database
+/// more information can be found here: https://www.mongodb.com/docs/manual/reference/operator/aggregation/indexStats/
+pub async fn get_index_stats(
+    client: &Client,
+    database_name: &str,
+    collection_name: &str,
+) -> eyre::Result<Vec<bson::Bson>> {
+    // ) -> eyre::Result<Vec<bson::Document>> {
+    let db = client.database(database_name);
+    let collection = db.collection::<bson::Document>(collection_name);
+    let cursor = collection.aggregate([bson::doc! {"$indexStats": {}}]);
+    // let index_stats: Cursor<bson::Bson> = cursor.await?;
+    // let index_stats = index_stats.try_collect::<bson::Bson>().await?;
+    let index_stats: Vec<bson::Bson> = cursor
+        .await?
+        .map(|doc| {
+            doc.map_err(eyre::Report::from)
+                .and_then(|doc| bson::from_document(doc).map_err(eyre::Report::from))
+        })
+        .try_collect()
+        .await?;
+    Ok(index_stats)
+    // let index_stats = cursor.strea?).collect();
+    // let index_stats = futures::stream::iter(cursor.await?).collect();
+    // let index_stats: Cursor<> = cursor.await?;
+    // var indexStats []bson.M
+    // if err = cursor.All(context.Background(), &indexStats); err != nil {
+    // 	return nil, err
+    // }
+    // return indexStats, nil
+    // Ok(vec![])
+}
+
+#[derive(Debug)]
+pub struct MetricScraper {
+    client: Client,
+    metrics: Metrics,
+    start_time: SystemTime,
+}
+
 impl MetricScraper {
-    pub async fn record_metrics(
+    pub async fn record_index_stats(
         &mut self,
-        client: &Client,
+        database_name: &str,
+        collection_name: &str,
+        config: &metrics::Config,
         errors: &mut Vec<metrics::Error>,
     ) -> eyre::Result<()> {
+        if database_name == "local" {
+            return Ok(());
+        }
+        let index_stats = get_index_stats(&self.client, database_name, collection_name).await?;
+        let mut index_accesses = metrics::IndexAccesses::new();
+        index_accesses.record(&index_stats, database_name, collection_name, config, errors);
+        // self.metrics.record
+        // s.recordIndexStats(now, indexStats, databaseName, collectionName, errs)
+        Ok(())
+    }
+
+    pub async fn record_metrics(&mut self, errors: &mut Vec<metrics::Error>) -> eyre::Result<()> {
         let now = SystemTime::now();
 
-        let database_names = client.list_database_names().await?;
+        let database_names = self.client.list_database_names().await?;
         let database_count = database_names.len();
 
-        let server_status = client
+        // let version = get_version(client).await?;
+
+        let server_status = self
+            .client
             .database("admin")
             .run_command(bson::doc! {"serverStatus": 1})
             .await?;
@@ -371,11 +446,64 @@ impl MetricScraper {
         // println!("{:#?}", server_status);
 
         // let mut metrics = Metrics::default();
+
+        let version = get_version(&server_status)?;
+        debug!(version = version.to_string());
+
         let (server_address, server_port) = get_server_address_and_port(&server_status)?;
 
+        let storage_engine = match get_str!(&server_status, "storageEngine", "name") {
+            Err(err) => {
+                // todo: handle error
+                None
+            }
+            Ok("wiredTiger") => Some(StorageEngine::WiredTiger),
+            Ok(other) => Some(StorageEngine::Other(other.to_string())),
+        };
+        let config = metrics::Config {
+            start_time: self.start_time,
+            time: now,
+            database_name: None,
+            storage_engine,
+            version,
+        };
         self.metrics
-            .record_admin_metrics(&server_status, self.start_time, now, errors)?;
-        dbg!(errors.iter().map(|err| err.to_string()).collect::<Vec<_>>());
+            .record_admin_metrics(&server_status, &config, errors)?;
+
+        let database_name = "luup";
+        let collection_name = "users";
+        self.record_index_stats(database_name, collection_name, &config, errors)
+            .await?;
+
+        // debug log errors
+        for err in errors {
+            // warn!(errors.iter().map(|err| err.to_string()).collect::<Vec<_>>());
+            // match err
+            // use std::error::Error;
+            warn!("{}", err);
+            match err {
+                metrics::Error::CollectMetric {
+                    source:
+                        doc::Error {
+                            path,
+                            source:
+                                doc::QueryError::NotFound {
+                                    partial_match: Some(partial_match),
+                                },
+                        },
+                    ..
+                } => {
+                    trace!(
+                        "[{}] = {:#}",
+                        partial_match.path,
+                        omit_values(partial_match.value.clone(), 1)
+                    );
+                    // trace!("{:#?}", omit_values(partial_match.value.clone(), 1));
+                }
+                _ => {}
+            }
+            // warn!(err = err.to_string(), source = err.source());
+        }
         // create resource
         let resource = ResourceAttributesConfig {
             server_address: server_address.to_string(),
@@ -384,16 +512,13 @@ impl MetricScraper {
         }
         .to_resource();
         let metrics = self.metrics.emit_for_resource(resource);
-        dbg!(metrics);
+        // dbg!(metrics);
 
         Ok(())
     }
 }
 
-pub async fn record_metrics(client: &Client) -> eyre::Result<()> {
-    let version = get_version(client).await?;
-    println!("version is {version}");
-
+pub async fn record_metrics(client: Client) -> eyre::Result<()> {
     let mut errors = Vec::new();
     // // this is one way to record the metrics, easy for parallelization but all metrics must
     // // use the same input?
@@ -409,10 +534,11 @@ pub async fn record_metrics(client: &Client) -> eyre::Result<()> {
     //     metric.record(&doc, None, start_time, now, &mut errors);
     // }
     let mut scraper = MetricScraper {
+        client,
         start_time: SystemTime::now(),
         metrics: Metrics::new(),
     };
-    scraper.record_metrics(client, &mut errors).await?;
+    scraper.record_metrics(&mut errors).await?;
     Ok(())
 }
 

@@ -2,7 +2,6 @@ use std::fmt::Pointer;
 
 #[derive(Copy, Debug, Clone, Hash, PartialEq, Eq, PartialOrd, Ord)]
 pub enum BsonKey<'a> {
-    // KeyString(String),
     KeyStr(&'a str),
     Index(usize),
 }
@@ -10,20 +9,11 @@ pub enum BsonKey<'a> {
 impl<'a> std::fmt::Display for BsonKey<'a> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Self::KeyStr(key) => std::fmt::Debug::fmt(key, f),
-            Self::Index(idx) => std::fmt::Debug::fmt(idx, f),
+            Self::KeyStr(key) => std::fmt::Display::fmt(key, f),
+            Self::Index(idx) => std::fmt::Display::fmt(idx, f),
         }
     }
 }
-
-// impl<'a> std::fmt::Debug for BsonKey<'a> {
-//     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-//         match self {
-//             Self::KeyStr(key) => std::fmt::Debug::fmt(key, f),
-//             Self::Index(idx) => std::fmt::Debug::fmt(idx, f),
-//         }
-//     }
-// }
 
 #[derive(Clone, Debug, Hash, PartialEq, Eq, PartialOrd, Ord)]
 pub enum OwnedBsonKey {
@@ -34,32 +24,16 @@ pub enum OwnedBsonKey {
 impl std::fmt::Display for OwnedBsonKey {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Self::Key(key) => std::fmt::Debug::fmt(key, f),
-            Self::Index(idx) => std::fmt::Debug::fmt(idx, f),
+            Self::Key(key) => std::fmt::Display::fmt(key, f),
+            Self::Index(idx) => std::fmt::Display::fmt(idx, f),
         }
     }
 }
 
-// impl std::fmt::Display for OwnedBsonKey {
-// }
-
-// impl<'a> std::borrow::Borrow<BsonKey<'a>> for OwnedBsonKey {
-//     fn borrow(&self) -> &BsonKey<'a> {
-//         match &self {
-//             Self::Index(idx) => &BsonKey::Index(*idx),
-//             Self::Key(key) => &BsonKey::KeyStr(key.as_ref()),
-//         }
-//     }
-//
-// }
-
-// impl<'a> ToOwned for BsonKey<'a> {
-//     type Owned = OwnedBsonKey;
 impl<'a> BsonKey<'a> {
     fn to_owned(&self) -> OwnedBsonKey {
         match self {
             Self::Index(idx) => OwnedBsonKey::Index(*idx),
-            // Self::KeyString(key) => OwnedBsonKey::Key(key.to_string()),
             Self::KeyStr(key) => OwnedBsonKey::Key(key.to_string()),
         }
     }
@@ -77,12 +51,6 @@ impl<'a> From<&'a str> for BsonKey<'a> {
     }
 }
 
-// impl<'a> From<String> for BsonKey<'a> {
-//     fn from(value: String) -> Self {
-//         BsonKey::KeyString(value)
-//     }
-// }
-
 pub fn get<'a, 'b: 'a>(
     value: &'b mongodb::bson::Bson,
     key: BsonKey<'a>,
@@ -90,7 +58,6 @@ pub fn get<'a, 'b: 'a>(
     match (value, key) {
         (mongodb::bson::Bson::Array(arr), BsonKey::Index(idx)) => arr.get(idx),
         (mongodb::bson::Bson::Document(doc), BsonKey::KeyStr(key)) => doc.get(key),
-        // (mongodb::bson::Bson::Document(doc), BsonKey::KeyString(key)) => doc.get(key),
         _ => None,
     }
 }
@@ -102,14 +69,6 @@ pub trait BsonValue {
 
 impl BsonValue for mongodb::bson::Bson {
     fn get_str(&self) -> Result<&str, InvalidTypeError> {
-        // let options = bson::DeserializerOptions::builder()
-        //     .(false)
-        //     .human_readable(false)
-        //     .build();
-        // Ok(self.try_into().unwrap())
-        // self.deser
-        // bson::from_bson(self)
-        // bson::from_bson_with_options(self)
         self.as_str().ok_or_else(|| InvalidTypeError {
             expected_type: "string".to_string(),
             value: self.clone(),
@@ -124,32 +83,30 @@ impl BsonValue for mongodb::bson::Bson {
                 value: self.clone(),
             }),
         }
-        // this allows parsing i32 too
-        // bson::from_bson(self.clone()).map_err(Into::into)
-        // self.as_i64().ok_or_else(|| eyre::eyre!("expected i64, got {self:?}"))
     }
 }
 
 #[derive(Debug)]
 pub struct OwnedPath(Vec<OwnedBsonKey>);
 
+impl std::fmt::Display for OwnedPath {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let len = self.0.len();
+        for (idx, key) in self.0.iter().enumerate() {
+            write!(f, "{}", key)?;
+            if idx + 1 < len {
+                write!(f, ".")?;
+            }
+        }
+        Ok(())
+    }
+}
+
 impl<'a> FromIterator<&'a BsonKey<'a>> for OwnedPath {
     fn from_iter<T: IntoIterator<Item = &'a BsonKey<'a>>>(iter: T) -> Self {
         Self(iter.into_iter().map(|k| k.to_owned()).collect())
     }
 }
-
-impl OwnedPath {
-    pub fn to_dotted_string(&self) -> String {
-        self.0
-            .iter()
-            .map(|p| p.to_string())
-            .collect::<Vec<_>>()
-            .join(".")
-    }
-}
-
-// impl From<Vec<BsonKey<'a>>>
 
 #[derive(Debug)]
 pub struct Match {
@@ -160,28 +117,9 @@ pub struct Match {
 #[derive(thiserror::Error, Debug)]
 #[error("invalid type: expected {expected_type}, found {value:?}")]
 pub struct InvalidTypeError {
-    // path: Path,
     pub expected_type: String,
     pub value: mongodb::bson::Bson,
 }
-
-// impl std::fmt::Display for InvalidTypeError {
-//     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-//         write!(
-//             f,
-//             "invalid type: expected {}, found {:?}",
-//             self.expected_type,
-//             self.value
-//         )
-//     }
-// }
-
-// pub fn dotted_path(path: &[OwnedBsonKey]) -> String {
-//     path.iter()
-//         .map(|p| p.to_string())
-//         .collect::<Vec<_>>()
-//         .join(".")
-// }
 
 #[derive(thiserror::Error, Debug)]
 pub struct Error {
@@ -192,7 +130,7 @@ pub struct Error {
 
 impl std::fmt::Display for Error {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}: {}", self.path.to_dotted_string(), self.source)
+        write!(f, "{:?}: {}", self.path.to_string(), self.source)
     }
 }
 
@@ -202,52 +140,11 @@ pub enum QueryError {
     NotFound { partial_match: Option<Match> },
     #[error(transparent)]
     InvalidType(InvalidTypeError),
-    // InvalidType(#[from] InvalidTypeError),
 }
-
-// impl std::fmt::Display for QueryError {
-//     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-//         match self {
-//             Self::NotFound {
-//                 path,
-//                 partial_match,
-//             } => {
-//                 write!(f, "not found: {:?}", dotted_path(&*path))
-//             }
-//             Self::InvalidType(err) => std::fmt::Display::fmt(err, f),
-//         }
-//     }
-// }
-
-// #[inline]
-// fn get_helper<'a>(
-//     value: &mut Result<&'a mongodb::bson::Bson, Error>,
-//     key: impl Into<BsonKey<'a>>,
-//     path: &mut Vec<BsonKey<'a>>,
-// ) {
-//     let Ok(valid) = value else {
-//         return;
-//     };
-//     // if let Ok(valid) = value {
-//     // last_valid = valid;
-//     dbg!(&path);
-//     let key: crate::doc::BsonKey = key.into();
-//     value = crate::doc::get(&*valid, key).ok_or_else(|| Error::NotFound {
-//         path: path.into_iter().map(|p| p.to_owned()).collect(),
-//         partial_match: Match {
-//             path: path.into_iter().map(|p| p.to_owned()).collect()
-//         },
-//     });
-//     path.push(key);
-//     // path.push($x.to_string());
-//     // }
-// }
 
 pub fn get_path<'p, 'k: 'b, 'b: 'p + 'k>(
     document: &'b mongodb::bson::Bson,
     path: impl AsRef<[BsonKey<'k>]>,
-    // path: impl AsRef<&'p [BsonKey<'k>]>,
-    // path: &'p [BsonKey<'k>],
 ) -> Result<&'b mongodb::bson::Bson, Error> {
     let path = path.as_ref();
     let mut value: &mongodb::bson::Bson = document;
@@ -310,7 +207,6 @@ macro_rules! path {
 #[macro_export]
 macro_rules! get_i64 {
     ( $doc:expr, $( $x:expr ),* ) => {{
-        // let value = crate::get!($doc, $($x),*);
         let path = crate::path!($($x),*);
         crate::doc::get_path($doc, path.as_slice()).and_then(|v|
             crate::doc::BsonValue::get_i64(v).map_err(|err| {
@@ -325,7 +221,6 @@ macro_rules! get_i64 {
 #[macro_export]
 macro_rules! get_str{
     ( $doc:expr, $( $x:expr ),* ) => {{
-        // let value = crate::get!($doc, $($x),*);
         let path = crate::path!($($x),*);
         crate::doc::get_path($doc, path.as_slice()).and_then(|v|
             crate::doc::BsonValue::get_str(v).map_err(|err| {
