@@ -8,7 +8,7 @@ pub mod prometheus;
 
 use color_eyre::eyre;
 use futures::{StreamExt, TryStreamExt};
-use metrics::{Record, StorageEngine};
+use metrics::{EmitMetric, Record, StorageEngine};
 use mongodb::bson::spec::ElementType;
 use mongodb::Cursor;
 use mongodb::{bson, event::cmap::ConnectionCheckoutFailedReason, Client};
@@ -18,6 +18,7 @@ use opentelemetry_sdk::Resource;
 use regex::Regex;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
+use std::error::Error;
 use std::time::{Instant, SystemTime};
 use tracing::{debug, trace, warn};
 
@@ -143,109 +144,140 @@ pub fn get_server_address_and_port<'a>(
 
 #[derive(Debug)]
 pub struct Metrics {
-    collection_count: metrics::CollectionCount,
-    connection_count: metrics::ConnectionCount,
-    data_size: metrics::DataSize,
+    database_count: metrics::DatabaseCount,
+    operation_time: metrics::OperationTime,
+    admin_metrics: Vec<Box<dyn metrics::Record>>,
+    // collection_count: metrics::CollectionCount,
+    // connection_count: metrics::ConnectionCount,
+    // data_size: metrics::DataSize,
 }
 
-impl Metrics {
-    pub fn new() -> Self {
+impl Default for Metrics {
+    fn default() -> Self {
         Self {
-            collection_count: metrics::CollectionCount::new(),
-            connection_count: metrics::ConnectionCount::new(),
-            data_size: metrics::DataSize::new(),
+            database_count: metrics::DatabaseCount::default(),
+            operation_time: metrics::OperationTime::default(),
+            admin_metrics: vec![
+                Box::new(metrics::CacheOperations::default()),
+                Box::new(metrics::CursorCount::default()),
+                Box::new(metrics::CursorTimeouts::default()),
+                Box::new(metrics::GlobalLockTime::default()),
+                Box::new(metrics::NetworkRequestCount::default()),
+                Box::new(metrics::OperationCount::default()),
+                Box::new(metrics::OperationReplCount::default()),
+                Box::new(metrics::SessionCount::default()),
+                Box::new(metrics::OperationLatencyTime::default()),
+                Box::new(metrics::OperationLatencyOps::default()),
+                Box::new(metrics::Uptime::default()),
+                Box::new(metrics::Health::default()),
+            ],
+            // collection_count: metrics::CollectionCount::new(),
+            // connection_count: metrics::ConnectionCount::new(),
+            // data_size: metrics::DataSize::new(),
         }
     }
 }
 
 impl Metrics {
-    pub fn record_admin_metrics(
-        &mut self,
-        server_status: &bson::Bson,
-        config: &metrics::Config,
-        errors: &mut Vec<metrics::Error>,
-    ) -> eyre::Result<()> {
-        if config.storage_engine != Some(StorageEngine::WiredTiger) {
-            return Ok(());
-        }
+    // pub fn record_admin_metrics(
+    //     &mut self,
+    //     server_status: &bson::Bson,
+    //     config: &metrics::Config,
+    //     errors: &mut Vec<metrics::Error>,
+    // ) -> eyre::Result<()> {
+    //     if config.storage_engine != Some(StorageEngine::WiredTiger) {
+    //         return Ok(());
+    //     }
+    //
+    //     // dbg!(doc::get_path(
+    //     //     server_status,
+    //     //     path!(
+    //     //         "connections",
+    //     //         attributes::ConnectionType::Available.as_str()
+    //     //     )
+    //     // ));
+    //     // self.collection_count.record(server_status, config, errors);
+    //     // self.data_size.record(server_status, config, errors);
+    //     // self.connection_count.record(server_status, config, errors);
+    //
+    //     // let mut collection_count = metrics::CollectionCount::new();
+    //     // collection_count.record(server_status);
+    //     // match get_i64!(
+    //     //     server_status,
+    //     //     "wiredTiger",
+    //     //     "cache",
+    //     //     "pages read into cache"
+    //     // ) {
+    //     //     Ok(cache_misses) => {
+    //     //         println!("cache misses: {cache_misses}");
+    //     //     }
+    //     //     Err(err) => errors.push(metrics::Error::CollectMetric {
+    //     //         metric: "mongodb.cache.operations".to_string(),
+    //     //         attributes: "miss, hit".to_string(),
+    //     //         source: err.into(),
+    //     //     }),
+    //     // }
+    //     //
+    //     // // collectMetricWithAttributes = "failed to collect metric {} with attribute(s) %s: %w"
+    //     //
+    //     // let cache_hits = get!(
+    //     //     server_status,
+    //     //     "wiredTiger",
+    //     //     "cache",
+    //     //     "pages requested from the cache"
+    //     // )?
+    //     // .get_i64()?;
+    //     // println!("cache hits: {cache_hits}");
+    //     //
+    //     // // "mongodb.cache.operations"
+    //     //
+    //     // let cache_hits = cache_hits - cache_misses;
+    //     // // s.mb.RecordMongodbCacheOperationsDataPoint(now, cacheHits, metadata.AttributeTypeHit)
+    //     //
+    //     // // s.recordCursorCount(now, document, errs)
+    //     // // metricName := "mongodb.cursor.count"
+    //     // let cursor_count = get!(server_status, "metrics", "cursor", "open", "total")?.get_i64()?;
+    //     // println!("cursor count: {cursor_count}");
+    //     //
+    //     // // s.recordCursorTimeoutCount(now, document, errs)
+    //     // // metricName := "mongodb.cursor.timeout.count"
+    //     // let cursor_timeouts = get!(server_status, "metrics", "cursor", "timedOut")?.get_i64()?;
+    //     // println!("cursor timeouts: {cursor_timeouts}");
+    //     // // s.mb.RecordMongodbCursorTimeoutCountDataPoint(now, val)
+    //     // // errs.AddPartial(1, fmt.Errorf(collectMetricError, metricName, err))
+    //     //
+    //     // // s.recordGlobalLockTime(now, document, errs)
+    //     // // metricName := "mongodb.global_lock.time"
+    //     // let global_lock_time = get!(server_status, "globalLock", "totalTime")?.get_i64()?;
+    //     // let global_lock_held_millis = global_lock_time / 1000;
+    //     // println!("cursor timeouts: {global_lock_time}");
+    //     // // s.mb.RecordMongodbGlobalLockTimeDataPoint(now, heldTimeMilliseconds)
+    //     //
+    //     // // s.recordNetworkCount(now, document, errs)
+    //     // let network_bytes_in = get!(server_status, "network", "bytesIn")?.get_i64()?;
+    //     // let network_bytes_out = get!(server_status, "network", "bytesOut")?.get_i64()?;
+    //     // let network_num_requests = get!(server_status, "network", "numRequests")?.get_i64()?;
+    //
+    //     // s.recordOperations(now, document, errs)
+    //     // s.recordOperationsRepl(now, document, errs)
+    //     // s.recordSessionCount(now, document, errs)
+    //     // s.recordLatencyTime(now, document, errs)
+    //     // s.recordUptime(now, document, errs)
+    //     // s.recordHealth(now, document, errs)
+    //     Ok(())
+    // }
 
-        // dbg!(doc::get_path(
-        //     server_status,
-        //     path!(
-        //         "connections",
-        //         attributes::ConnectionType::Available.as_str()
-        //     )
-        // ));
-        self.collection_count.record(server_status, config, errors);
-        self.data_size.record(server_status, config, errors);
-        self.connection_count.record(server_status, config, errors);
-
-        // let mut collection_count = metrics::CollectionCount::new();
-        // collection_count.record(server_status);
-        // match get_i64!(
-        //     server_status,
-        //     "wiredTiger",
-        //     "cache",
-        //     "pages read into cache"
-        // ) {
-        //     Ok(cache_misses) => {
-        //         println!("cache misses: {cache_misses}");
-        //     }
-        //     Err(err) => errors.push(metrics::Error::CollectMetric {
-        //         metric: "mongodb.cache.operations".to_string(),
-        //         attributes: "miss, hit".to_string(),
-        //         source: err.into(),
-        //     }),
-        // }
-        //
-        // // collectMetricWithAttributes = "failed to collect metric {} with attribute(s) %s: %w"
-        //
-        // let cache_hits = get!(
-        //     server_status,
-        //     "wiredTiger",
-        //     "cache",
-        //     "pages requested from the cache"
-        // )?
-        // .get_i64()?;
-        // println!("cache hits: {cache_hits}");
-        //
-        // // "mongodb.cache.operations"
-        //
-        // let cache_hits = cache_hits - cache_misses;
-        // // s.mb.RecordMongodbCacheOperationsDataPoint(now, cacheHits, metadata.AttributeTypeHit)
-        //
-        // // s.recordCursorCount(now, document, errs)
-        // // metricName := "mongodb.cursor.count"
-        // let cursor_count = get!(server_status, "metrics", "cursor", "open", "total")?.get_i64()?;
-        // println!("cursor count: {cursor_count}");
-        //
-        // // s.recordCursorTimeoutCount(now, document, errs)
-        // // metricName := "mongodb.cursor.timeout.count"
-        // let cursor_timeouts = get!(server_status, "metrics", "cursor", "timedOut")?.get_i64()?;
-        // println!("cursor timeouts: {cursor_timeouts}");
-        // // s.mb.RecordMongodbCursorTimeoutCountDataPoint(now, val)
-        // // errs.AddPartial(1, fmt.Errorf(collectMetricError, metricName, err))
-        //
-        // // s.recordGlobalLockTime(now, document, errs)
-        // // metricName := "mongodb.global_lock.time"
-        // let global_lock_time = get!(server_status, "globalLock", "totalTime")?.get_i64()?;
-        // let global_lock_held_millis = global_lock_time / 1000;
-        // println!("cursor timeouts: {global_lock_time}");
-        // // s.mb.RecordMongodbGlobalLockTimeDataPoint(now, heldTimeMilliseconds)
-        //
-        // // s.recordNetworkCount(now, document, errs)
-        // let network_bytes_in = get!(server_status, "network", "bytesIn")?.get_i64()?;
-        // let network_bytes_out = get!(server_status, "network", "bytesOut")?.get_i64()?;
-        // let network_num_requests = get!(server_status, "network", "numRequests")?.get_i64()?;
-
-        // s.recordOperations(now, document, errs)
-        // s.recordOperationsRepl(now, document, errs)
-        // s.recordSessionCount(now, document, errs)
-        // s.recordLatencyTime(now, document, errs)
-        // s.recordUptime(now, document, errs)
-        // s.recordHealth(now, document, errs)
-        Ok(())
-    }
+    // pub fn emittable_metrics_iter_mut(
+    //     &mut self,
+    // ) -> impl Iterator<Item = &mut dyn metrics::EmitMetric> {
+    //     [&mut self.database_count as &mut dyn metrics::EmitMetric]
+    //         .into_iter()
+    //         .chain(
+    //             self.admin_metrics
+    //                 .iter_mut()
+    //                 .map(|metric| metric.as_mut() as &mut dyn metrics::EmitMetric),
+    //         )
+    // }
 
     /// EmitForResource saves all the generated metrics under a new resource and updates the internal state to be ready for
     // recording another set of data points as part of another resource. This function can be helpful when one scraper
@@ -264,9 +296,11 @@ impl Metrics {
             metrics: vec![],
         };
 
-        metrics.metrics.push(self.data_size.emit());
-        metrics.metrics.push(self.collection_count.emit());
-        metrics.metrics.push(self.connection_count.emit());
+        metrics.metrics.push(self.database_count.emit());
+        metrics.metrics.push(self.operation_time.emit());
+        for metric in self.admin_metrics.iter_mut() {
+            metrics.metrics.push(metric.emit());
+        }
 
         let resource_metrics = ResourceMetrics {
             resource,
@@ -409,23 +443,23 @@ pub struct MetricScraper {
 }
 
 impl MetricScraper {
-    pub async fn record_index_stats(
-        &mut self,
-        database_name: &str,
-        collection_name: &str,
-        config: &metrics::Config,
-        errors: &mut Vec<metrics::Error>,
-    ) -> eyre::Result<()> {
-        if database_name == "local" {
-            return Ok(());
-        }
-        let index_stats = get_index_stats(&self.client, database_name, collection_name).await?;
-        let mut index_accesses = metrics::IndexAccesses::new();
-        index_accesses.record(&index_stats, database_name, collection_name, config, errors);
-        // self.metrics.record
-        // s.recordIndexStats(now, indexStats, databaseName, collectionName, errs)
-        Ok(())
-    }
+    // pub async fn record_index_stats(
+    //     &mut self,
+    //     database_name: &str,
+    //     collection_name: &str,
+    //     config: &metrics::Config,
+    //     errors: &mut Vec<metrics::Error>,
+    // ) -> eyre::Result<()> {
+    //     if database_name == "local" {
+    //         return Ok(());
+    //     }
+    //     let index_stats = get_index_stats(&self.client, database_name, collection_name).await?;
+    //     let mut index_accesses = metrics::IndexAccesses::new();
+    //     index_accesses.record(&index_stats, database_name, collection_name, config, errors);
+    //     // self.metrics.record
+    //     // s.recordIndexStats(now, indexStats, databaseName, collectionName, errs)
+    //     Ok(())
+    // }
 
     pub async fn record_metrics(&mut self, errors: &mut Vec<metrics::Error>) -> eyre::Result<()> {
         let now = SystemTime::now();
@@ -433,28 +467,28 @@ impl MetricScraper {
         let database_names = self.client.list_database_names().await?;
         let database_count = database_names.len();
 
-        // let version = get_version(client).await?;
-
         let server_status = self
             .client
             .database("admin")
             .run_command(bson::doc! {"serverStatus": 1})
             .await?;
         let server_status = bson::Bson::from(server_status);
-        // println!("{:#?}", server_status);
-        // let server_status: ServerStatus = bson::from_document(raw_server_status.clone())?;
-        // println!("{:#?}", server_status);
-
-        // let mut metrics = Metrics::default();
 
         let version = get_version(&server_status)?;
-        debug!(version = version.to_string());
+        trace!(version = version.to_string());
 
         let (server_address, server_port) = get_server_address_and_port(&server_status)?;
 
         let storage_engine = match get_str!(&server_status, "storageEngine", "name") {
             Err(err) => {
-                // todo: handle error
+                warn!("{}", err);
+                if let Some(partial_match) = err.source.partial_match() {
+                    trace!(
+                        "[{}] = {:#}",
+                        partial_match.path,
+                        omit_values(partial_match.value.clone(), 1)
+                    );
+                }
                 None
             }
             Ok("wiredTiger") => Some(StorageEngine::WiredTiger),
@@ -467,42 +501,40 @@ impl MetricScraper {
             storage_engine,
             version,
         };
+
+        self.metrics.database_count.record(database_count, &config);
+        for metric in self.metrics.admin_metrics.iter_mut() {
+            metric.record(&server_status, &config, errors);
+        }
+
+        // return c.RunCommand(ctx, "admin", bson.M{"top": 1})
+        let top_stats = self
+            .client
+            .database("admin")
+            .run_command(bson::doc! { "top": 1})
+            .await?;
+        let top_stats = bson::from_document(top_stats)?;
         self.metrics
-            .record_admin_metrics(&server_status, &config, errors)?;
+            .operation_time
+            .record(&top_stats, &config, errors);
+        // self.metrics
+        //     .record_admin_metrics(&server_status, &config, errors)?;
 
         let database_name = "luup";
         let collection_name = "users";
-        self.record_index_stats(database_name, collection_name, &config, errors)
-            .await?;
+        // self.record_index_stats(database_name, collection_name, &config, errors)
+        //     .await?;
 
         // debug log errors
         for err in errors {
-            // warn!(errors.iter().map(|err| err.to_string()).collect::<Vec<_>>());
-            // match err
-            // use std::error::Error;
             warn!("{}", err);
-            match err {
-                metrics::Error::CollectMetric {
-                    source:
-                        doc::Error {
-                            path,
-                            source:
-                                doc::QueryError::NotFound {
-                                    partial_match: Some(partial_match),
-                                },
-                        },
-                    ..
-                } => {
-                    trace!(
-                        "[{}] = {:#}",
-                        partial_match.path,
-                        omit_values(partial_match.value.clone(), 1)
-                    );
-                    // trace!("{:#?}", omit_values(partial_match.value.clone(), 1));
-                }
-                _ => {}
+            if let Some(partial_match) = err.partial_match() {
+                trace!(
+                    "[{}] = {:#}",
+                    partial_match.path,
+                    omit_values(partial_match.value.clone(), 1)
+                );
             }
-            // warn!(err = err.to_string(), source = err.source());
         }
         // create resource
         let resource = ResourceAttributesConfig {
@@ -517,6 +549,29 @@ impl MetricScraper {
         Ok(())
     }
 }
+
+// fn trace_partial_match(err: &metrics::Error) {
+// match err {
+//     metrics::Error::CollectMetric {
+//         source:
+//             doc::Error {
+//                 path,
+//                 source,
+//                     // doc::QueryError::NotFound {
+//                     //     partial_match: Some(partial_match),
+//                     // },
+//             },
+//         ..
+//     } => {
+//         trace!(
+//             "[{}] = {:#}",
+//             partial_match.path,
+//             omit_values(partial_match.value.clone(), 1)
+//         );
+//     }
+//     _ => {}
+// }
+// }
 
 pub async fn record_metrics(client: Client) -> eyre::Result<()> {
     let mut errors = Vec::new();
@@ -536,7 +591,7 @@ pub async fn record_metrics(client: Client) -> eyre::Result<()> {
     let mut scraper = MetricScraper {
         client,
         start_time: SystemTime::now(),
-        metrics: Metrics::new(),
+        metrics: Metrics::default(),
     };
     scraper.record_metrics(&mut errors).await?;
     Ok(())

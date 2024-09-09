@@ -78,6 +78,7 @@ impl BsonValue for mongodb::bson::Bson {
         match self {
             mongodb::bson::Bson::Int64(v) => Ok(*v),
             mongodb::bson::Bson::Int32(v) => Ok((*v).into()),
+            mongodb::bson::Bson::Double(v) => Ok((*v).round() as i64),
             other => Err(InvalidTypeError {
                 expected_type: "integer".to_string(),
                 value: self.clone(),
@@ -140,6 +141,15 @@ pub enum QueryError {
     NotFound { partial_match: Option<Match> },
     #[error(transparent)]
     InvalidType(InvalidTypeError),
+}
+
+impl QueryError {
+    pub fn partial_match(&self) -> Option<&Match> {
+        match self {
+            QueryError::NotFound { partial_match } => partial_match.as_ref(),
+            _ => None,
+        }
+    }
 }
 
 pub fn get_path<'p, 'k: 'b, 'b: 'p + 'k>(
