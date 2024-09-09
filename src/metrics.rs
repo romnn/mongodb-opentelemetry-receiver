@@ -12,9 +12,10 @@ use crate::{attributes, doc};
 
 #[derive(thiserror::Error, Debug)]
 pub enum Error {
-    #[error("failed to collect {metric:?}: {source}")]
+    #[error("failed to collect {metric:?} for db {db:?}: {source}")]
     CollectMetric {
         metric: &'static str,
+        db: Option<String>,
         #[source]
         source: doc::Error,
     },
@@ -180,6 +181,7 @@ impl Record for CollectionCount {
             }
             Err(err) => errors.push(Error::CollectMetric {
                 metric: self.0.descriptor.name,
+                db: config.database_name.clone(),
                 source: err.into(),
             }),
         }
@@ -207,7 +209,7 @@ impl Default for DataSize {
 
 impl Record for DataSize {
     fn record(&mut self, stats: &bson::Bson, config: &Config, errors: &mut Vec<Error>) -> () {
-        match crate::get_i64!(stats, "mongodb", "data", "size") {
+        match crate::get_i64!(stats, "dataSize") {
             Ok(value) => {
                 self.0.data.data_points.push(DataPoint {
                     ..datapoint(value, config)
@@ -215,6 +217,7 @@ impl Record for DataSize {
             }
             Err(err) => errors.push(Error::CollectMetric {
                 metric: self.0.descriptor.name,
+                db: config.database_name.clone(),
                 source: err.into(),
             }),
         }
@@ -285,6 +288,7 @@ impl Record for ConnectionCount {
                 }
                 Err(err) => errors.push(Error::CollectMetric {
                     metric: self.0.descriptor.name,
+                    db: config.database_name.clone(),
                     source: err.into(),
                 }),
             }
@@ -335,6 +339,7 @@ impl Record for CacheOperations {
                 Err(err) => {
                     errors.push(Error::CollectMetric {
                         metric: self.0.descriptor.name,
+                        db: config.database_name.clone(),
                         source: err.into(),
                     });
                     return;
@@ -350,6 +355,7 @@ impl Record for CacheOperations {
             Err(err) => {
                 errors.push(Error::CollectMetric {
                     metric: self.0.descriptor.name,
+                    db: config.database_name.clone(),
                     source: err.into(),
                 });
                 return;
@@ -392,6 +398,7 @@ impl Record for CursorCount {
             }
             Err(err) => errors.push(Error::CollectMetric {
                 metric: self.0.descriptor.name,
+                db: config.database_name.clone(),
                 source: err.into(),
             }),
         }
@@ -427,6 +434,7 @@ impl Record for CursorTimeouts {
             }
             Err(err) => errors.push(Error::CollectMetric {
                 metric: self.0.descriptor.name,
+                db: config.database_name.clone(),
                 source: err.into(),
             }),
         }
@@ -533,6 +541,7 @@ impl Record for DocumentOperations {
                 }
                 Err(err) => errors.push(Error::CollectMetric {
                     metric: self.0.descriptor.name,
+                    db: config.database_name.clone(),
                     source: err.into(),
                 }),
             }
@@ -575,6 +584,7 @@ impl Record for Extent {
             }
             Err(err) => errors.push(Error::CollectMetric {
                 metric: self.0.descriptor.name,
+                db: config.database_name.clone(),
                 source: err.into(),
             }),
         }
@@ -613,6 +623,7 @@ impl Record for GlobalLockTime {
             }
             Err(err) => errors.push(Error::CollectMetric {
                 metric: self.0.descriptor.name,
+                db: config.database_name.clone(),
                 source: err.into(),
             }),
         }
@@ -649,6 +660,7 @@ impl Record for Health {
             }
             Err(err) => errors.push(Error::CollectMetric {
                 metric: self.0.descriptor.name,
+                db: config.database_name.clone(),
                 source: err.into(),
             }),
         }
@@ -692,6 +704,7 @@ impl IndexAccesses {
                 }
                 Err(err) => errors.push(Error::CollectMetric {
                     metric: self.0.descriptor.name,
+                    db: config.database_name.clone(),
                     source: err.into(),
                 }),
             }
@@ -734,6 +747,7 @@ impl Record for IndexCount {
             }
             Err(err) => errors.push(Error::CollectMetric {
                 metric: self.0.descriptor.name,
+                db: config.database_name.clone(),
                 source: err.into(),
             }),
         }
@@ -770,6 +784,7 @@ impl Record for IndexSize {
             }
             Err(err) => errors.push(Error::CollectMetric {
                 metric: self.0.descriptor.name,
+                db: config.database_name.clone(),
                 source: err.into(),
             }),
         }
@@ -908,6 +923,7 @@ fn record_lock_metric(
                 Err(err) => {
                     errors.push(Error::CollectMetric {
                         metric: metric.descriptor.name,
+                        db: config.database_name.clone(),
                         source: err.into(),
                     });
                 }
@@ -1079,6 +1095,7 @@ impl Record for MemoryUsage {
                 }
                 Err(err) => errors.push(Error::CollectMetric {
                     metric: self.0.descriptor.name,
+                    db: config.database_name.clone(),
                     source: err.into(),
                 }),
             }
@@ -1116,6 +1133,7 @@ impl Record for NetworkIn {
             }
             Err(err) => errors.push(Error::CollectMetric {
                 metric: self.0.descriptor.name,
+                db: config.database_name.clone(),
                 source: err.into(),
             }),
         }
@@ -1152,6 +1170,7 @@ impl Record for NetworkOut {
             }
             Err(err) => errors.push(Error::CollectMetric {
                 metric: self.0.descriptor.name,
+                db: config.database_name.clone(),
                 source: err.into(),
             }),
         }
@@ -1188,6 +1207,7 @@ impl Record for NetworkRequestCount {
             }
             Err(err) => errors.push(Error::CollectMetric {
                 metric: self.0.descriptor.name,
+                db: config.database_name.clone(),
                 source: err.into(),
             }),
         }
@@ -1224,6 +1244,7 @@ impl Record for ObjectCount {
             }
             Err(err) => errors.push(Error::CollectMetric {
                 metric: self.0.descriptor.name,
+                db: config.database_name.clone(),
                 source: err.into(),
             }),
         }
@@ -1266,6 +1287,7 @@ impl Record for OperationCount {
                 }
                 Err(err) => errors.push(Error::CollectMetric {
                     metric: self.0.descriptor.name,
+                    db: config.database_name.clone(),
                     source: err.into(),
                 }),
             }
@@ -1338,6 +1360,7 @@ impl Record for OperationLatencyTime {
                 }
                 Err(err) => errors.push(Error::CollectMetric {
                     metric: self.0.descriptor.name,
+                    db: config.database_name.clone(),
                     source: err.into(),
                 }),
             }
@@ -1380,6 +1403,7 @@ impl Record for OperationLatencyOps {
                 }
                 Err(err) => errors.push(Error::CollectMetric {
                     metric: self.0.descriptor.name,
+                    db: config.database_name.clone(),
                     source: err.into(),
                 }),
             }
@@ -1423,6 +1447,7 @@ impl Record for OperationReplCount {
                 }
                 Err(err) => errors.push(Error::CollectMetric {
                     metric: self.0.descriptor.name,
+                    db: config.database_name.clone(),
                     source: err.into(),
                 }),
             }
@@ -1499,6 +1524,7 @@ impl Record for OperationTime {
             Err(err) => {
                 errors.push(Error::CollectMetric {
                     metric: self.0.descriptor.name,
+                    db: config.database_name.clone(),
                     source: err.into(),
                 });
                 return;
@@ -1513,6 +1539,7 @@ impl Record for OperationTime {
                 Err(err) => {
                     errors.push(Error::CollectMetric {
                         metric: self.0.descriptor.name,
+                        db: config.database_name.clone(),
                         source: err.into(),
                     });
                     return;
@@ -1562,6 +1589,7 @@ impl Record for SessionCount {
             }
             Err(err) => errors.push(Error::CollectMetric {
                 metric: self.0.descriptor.name,
+                db: config.database_name.clone(),
                 source: err.into(),
             }),
         }
@@ -1599,6 +1627,7 @@ impl Record for StorageSize {
             }
             Err(err) => errors.push(Error::CollectMetric {
                 metric: self.0.descriptor.name,
+                db: config.database_name.clone(),
                 source: err.into(),
             }),
         }
@@ -1636,6 +1665,7 @@ impl Record for Uptime {
             }
             Err(err) => errors.push(Error::CollectMetric {
                 metric: self.0.descriptor.name,
+                db: config.database_name.clone(),
                 source: err.into(),
             }),
         }

@@ -147,9 +147,7 @@ pub struct Metrics {
     database_count: metrics::DatabaseCount,
     operation_time: metrics::OperationTime,
     admin_metrics: Vec<Box<dyn metrics::Record>>,
-    // collection_count: metrics::CollectionCount,
-    // connection_count: metrics::ConnectionCount,
-    // data_size: metrics::DataSize,
+    per_db_metrics: Vec<Box<dyn metrics::Record>>,
 }
 
 impl Default for Metrics {
@@ -170,6 +168,15 @@ impl Default for Metrics {
                 Box::new(metrics::OperationLatencyOps::default()),
                 Box::new(metrics::Uptime::default()),
                 Box::new(metrics::Health::default()),
+            ],
+            per_db_metrics: vec![
+                Box::new(metrics::CollectionCount::default()),
+                Box::new(metrics::DataSize::default()),
+                Box::new(metrics::Extent::default()),
+                Box::new(metrics::IndexSize::default()),
+                Box::new(metrics::IndexCount::default()),
+                Box::new(metrics::ObjectCount::default()),
+                Box::new(metrics::StorageSize::default()),
             ],
             // collection_count: metrics::CollectionCount::new(),
             // connection_count: metrics::ConnectionCount::new(),
@@ -442,6 +449,40 @@ pub struct MetricScraper {
     start_time: SystemTime,
 }
 
+fn get_storage_engine(server_status: &bson::Bson) -> Option<StorageEngine> {
+    match get_str!(&server_status, "storageEngine", "name") {
+        Err(err) => {
+            warn!("{}", err);
+            if let Some(partial_match) = err.source.partial_match() {
+                trace!(
+                    "[{}] = {:#}",
+                    partial_match.path,
+                    omit_values(partial_match.value.clone(), 1)
+                );
+            }
+            None
+        }
+        Ok("wiredTiger") => Some(StorageEngine::WiredTiger),
+        Ok(other) => Some(StorageEngine::Other(other.to_string())),
+    }
+}
+
+async fn get_server_status(client: &Client, database_name: &str) -> eyre::Result<bson::Bson> {
+    let server_status = client
+        .database(database_name)
+        .run_command(bson::doc! {"serverStatus": 1})
+        .await?;
+    Ok(bson::Bson::from(server_status))
+}
+
+async fn get_db_stats(client: &Client, database_name: &str) -> eyre::Result<bson::Bson> {
+    let db_stats = client
+        .database(&database_name)
+        .run_command(bson::doc! {"dbStats": 1})
+        .await?;
+    Ok(bson::Bson::from(db_stats))
+}
+
 impl MetricScraper {
     // pub async fn record_index_stats(
     //     &mut self,
@@ -467,34 +508,16 @@ impl MetricScraper {
         let database_names = self.client.list_database_names().await?;
         let database_count = database_names.len();
 
-        let server_status = self
-            .client
-            .database("admin")
-            .run_command(bson::doc! {"serverStatus": 1})
-            .await?;
-        let server_status = bson::Bson::from(server_status);
-
+        let server_status = get_server_status(&self.client, "admin").await?;
         let version = get_version(&server_status)?;
         trace!(version = version.to_string());
 
+        let storage_engine = get_storage_engine(&server_status);
+        trace!(?storage_engine);
+
         let (server_address, server_port) = get_server_address_and_port(&server_status)?;
 
-        let storage_engine = match get_str!(&server_status, "storageEngine", "name") {
-            Err(err) => {
-                warn!("{}", err);
-                if let Some(partial_match) = err.source.partial_match() {
-                    trace!(
-                        "[{}] = {:#}",
-                        partial_match.path,
-                        omit_values(partial_match.value.clone(), 1)
-                    );
-                }
-                None
-            }
-            Ok("wiredTiger") => Some(StorageEngine::WiredTiger),
-            Ok(other) => Some(StorageEngine::Other(other.to_string())),
-        };
-        let config = metrics::Config {
+        let mut config = metrics::Config {
             start_time: self.start_time,
             time: now,
             database_name: None,
@@ -525,6 +548,42 @@ impl MetricScraper {
         // self.record_index_stats(database_name, collection_name, &config, errors)
         //     .await?;
 
+        // create resource
+        let resource = ResourceAttributesConfig {
+            server_address: server_address.to_string(),
+            server_port,
+            database: "".to_string(),
+        }
+        .to_resource();
+        let metrics = self.metrics.emit_for_resource(resource);
+
+        for database_name in database_names.iter() {
+            config.database_name = Some(database_name.clone());
+            let db_stats = get_db_stats(&self.client, database_name).await?;
+            // if err != nil {
+            // 	errs.AddPartial(1, fmt.Errorf("failed to fetch database stats metrics: %w", err))
+            // } else {
+            // 	s.recordDBStats(now, dbStats, databaseName, errs)
+            // }
+            for metric in self.metrics.per_db_metrics.iter_mut() {
+                metric.record(&db_stats, &config, errors);
+            }
+
+            let db_server_status = get_server_status(&self.client, database_name).await?;
+            // if err != nil {
+            // 	errs.AddPartial(1, fmt.Errorf("failed to fetch server status metrics: %w", err))
+            // 	return
+            // }
+            // s.recordNormalServerStats(now, serverStatus, databaseName, errs)
+            // s.recordConnections(now, doc, dbName, errs)
+            // s.recordDocumentOperations(now, doc, dbName, errs)
+            // s.recordMemoryUsage(now, doc, dbName, errs)
+            // s.recordLockAcquireCounts(now, doc, dbName, errs)
+            // s.recordLockAcquireWaitCounts(now, doc, dbName, errs)
+            // s.recordLockTimeAcquiringMicros(now, doc, dbName, errs)
+            // s.recordLockDeadlockCount(now, doc, dbName, errs)
+        }
+
         // debug log errors
         for err in errors {
             warn!("{}", err);
@@ -536,42 +595,10 @@ impl MetricScraper {
                 );
             }
         }
-        // create resource
-        let resource = ResourceAttributesConfig {
-            server_address: server_address.to_string(),
-            server_port,
-            database: "".to_string(),
-        }
-        .to_resource();
-        let metrics = self.metrics.emit_for_resource(resource);
-        // dbg!(metrics);
 
         Ok(())
     }
 }
-
-// fn trace_partial_match(err: &metrics::Error) {
-// match err {
-//     metrics::Error::CollectMetric {
-//         source:
-//             doc::Error {
-//                 path,
-//                 source,
-//                     // doc::QueryError::NotFound {
-//                     //     partial_match: Some(partial_match),
-//                     // },
-//             },
-//         ..
-//     } => {
-//         trace!(
-//             "[{}] = {:#}",
-//             partial_match.path,
-//             omit_values(partial_match.value.clone(), 1)
-//         );
-//     }
-//     _ => {}
-// }
-// }
 
 pub async fn record_metrics(client: Client) -> eyre::Result<()> {
     let mut errors = Vec::new();
