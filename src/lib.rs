@@ -5,6 +5,7 @@ pub mod doc;
 pub mod metrics;
 pub mod otlp;
 pub mod prometheus;
+pub mod scrape;
 
 use color_eyre::eyre;
 use futures::{StreamExt, TryStreamExt};
@@ -12,7 +13,7 @@ use metrics::{EmitMetric, Record, StorageEngine};
 use mongodb::bson::spec::ElementType;
 use mongodb::Cursor;
 use mongodb::{bson, event::cmap::ConnectionCheckoutFailedReason, Client};
-use opentelemetry::{KeyValue, Value};
+use opentelemetry::{InstrumentationLibrary, KeyValue, Value};
 use opentelemetry_sdk::metrics::data::{ResourceMetrics, ScopeMetrics};
 use opentelemetry_sdk::Resource;
 use regex::Regex;
@@ -29,6 +30,30 @@ pub const DEFAULT_PORT: u16 = 27017;
 // }
 
 // regexp.MustCompile("^" + VersionRegexpRaw + "$")
+
+trait NumDatapoints {
+    fn num_datapoints(&self) -> Option<usize>;
+}
+
+impl NumDatapoints for opentelemetry_sdk::metrics::data::Metric {
+    fn num_datapoints(&self) -> Option<usize> {
+        if let Some(sum) = self
+            .data
+            .as_any()
+            .downcast_ref::<opentelemetry_sdk::metrics::data::Sum<i64>>()
+        {
+            return Some(sum.data_points.len());
+        }
+        if let Some(sum) = self
+            .data
+            .as_any()
+            .downcast_ref::<opentelemetry_sdk::metrics::data::Gauge<i64>>()
+        {
+            return Some(sum.data_points.len());
+        }
+        None
+    }
+}
 
 fn omit_values(mut value: bson::Bson, depth: usize) -> bson::Bson {
     omit_values_visitor(&mut value, depth);
@@ -146,8 +171,10 @@ pub fn get_server_address_and_port<'a>(
 pub struct Metrics {
     database_count: metrics::DatabaseCount,
     operation_time: metrics::OperationTime,
-    admin_metrics: Vec<Box<dyn metrics::Record>>,
-    per_db_metrics: Vec<Box<dyn metrics::Record>>,
+    index_accesses: metrics::IndexAccesses,
+    server_status_metrics: Vec<Box<dyn metrics::Record>>,
+    db_stats_metrics: Vec<Box<dyn metrics::Record>>,
+    db_server_status_metrics: Vec<Box<dyn metrics::Record>>,
 }
 
 impl Default for Metrics {
@@ -155,11 +182,14 @@ impl Default for Metrics {
         Self {
             database_count: metrics::DatabaseCount::default(),
             operation_time: metrics::OperationTime::default(),
-            admin_metrics: vec![
+            index_accesses: metrics::IndexAccesses::default(),
+            server_status_metrics: vec![
                 Box::new(metrics::CacheOperations::default()),
                 Box::new(metrics::CursorCount::default()),
                 Box::new(metrics::CursorTimeouts::default()),
                 Box::new(metrics::GlobalLockTime::default()),
+                Box::new(metrics::NetworkIn::default()),
+                Box::new(metrics::NetworkOut::default()),
                 Box::new(metrics::NetworkRequestCount::default()),
                 Box::new(metrics::OperationCount::default()),
                 Box::new(metrics::OperationReplCount::default()),
@@ -169,7 +199,7 @@ impl Default for Metrics {
                 Box::new(metrics::Uptime::default()),
                 Box::new(metrics::Health::default()),
             ],
-            per_db_metrics: vec![
+            db_stats_metrics: vec![
                 Box::new(metrics::CollectionCount::default()),
                 Box::new(metrics::DataSize::default()),
                 Box::new(metrics::Extent::default()),
@@ -178,11 +208,24 @@ impl Default for Metrics {
                 Box::new(metrics::ObjectCount::default()),
                 Box::new(metrics::StorageSize::default()),
             ],
-            // collection_count: metrics::CollectionCount::new(),
-            // connection_count: metrics::ConnectionCount::new(),
-            // data_size: metrics::DataSize::new(),
+            db_server_status_metrics: vec![
+                Box::new(metrics::ConnectionCount::default()),
+                Box::new(metrics::DocumentOperations::default()),
+                Box::new(metrics::MemoryUsage::default()),
+                Box::new(metrics::LockAquireCount::default()),
+                Box::new(metrics::LockAquireWaitCount::default()),
+                Box::new(metrics::LockAquireTime::default()),
+                Box::new(metrics::LockAquireDeadlockCount::default()),
+            ],
         }
     }
+}
+
+lazy_static::lazy_static! {
+    static ref LIBRARY: InstrumentationLibrary = opentelemetry_sdk::InstrumentationLibrary::builder("mongodb-opentelemetry-collector")
+        .with_version(env!("CARGO_PKG_VERSION"))
+        .with_schema_url("https://opentelemetry.io/schemas/1.17.0")
+        .build();
 }
 
 impl Metrics {
@@ -286,126 +329,57 @@ impl Metrics {
     //         )
     // }
 
-    /// EmitForResource saves all the generated metrics under a new resource and updates the internal state to be ready for
-    // recording another set of data points as part of another resource. This function can be helpful when one scraper
-    // needs to emit metrics from several resources. Otherwise calling this function is not required,
-    // just `Emit` function can be called instead.
-    // Resource attributes should be provided as ResourceMetricsOption arguments.
-    pub fn emit_for_resource(&mut self, resource: Resource) -> ResourceMetrics {
-        let library =
-            opentelemetry_sdk::InstrumentationLibrary::builder("mongodb-opentelemetry-collector")
-                .with_version(env!("CARGO_PKG_VERSION"))
-                .with_schema_url("https://opentelemetry.io/schemas/1.17.0")
-                .build();
-
-        let mut metrics = ScopeMetrics {
-            scope: library,
-            metrics: vec![],
-        };
-
-        metrics.metrics.push(self.database_count.emit());
-        metrics.metrics.push(self.operation_time.emit());
-        for metric in self.admin_metrics.iter_mut() {
-            metrics.metrics.push(metric.emit());
-        }
-
-        let resource_metrics = ResourceMetrics {
-            resource,
-            scope_metrics: vec![metrics],
-        };
-        resource_metrics
-        // 	ils.Metrics().EnsureCapacity(mb.metricsCapacity)
-        // 	mb.metricMongodbCacheOperations.emit(ils.Metrics())
-        // 	mb.metricMongodbCollectionCount.emit(ils.Metrics())
-        // 	mb.metricMongodbConnectionCount.emit(ils.Metrics())
-        // 	mb.metricMongodbCursorCount.emit(ils.Metrics())
-        // 	mb.metricMongodbCursorTimeoutCount.emit(ils.Metrics())
-        // 	mb.metricMongodbDataSize.emit(ils.Metrics())
-        // 	mb.metricMongodbDatabaseCount.emit(ils.Metrics())
-        // 	mb.metricMongodbDocumentOperationCount.emit(ils.Metrics())
-        // 	mb.metricMongodbExtentCount.emit(ils.Metrics())
-        // 	mb.metricMongodbGlobalLockTime.emit(ils.Metrics())
-        // 	mb.metricMongodbHealth.emit(ils.Metrics())
-        // 	mb.metricMongodbIndexAccessCount.emit(ils.Metrics())
-        // 	mb.metricMongodbIndexCount.emit(ils.Metrics())
-        // 	mb.metricMongodbIndexSize.emit(ils.Metrics())
-        // 	mb.metricMongodbLockAcquireCount.emit(ils.Metrics())
-        // 	mb.metricMongodbLockAcquireTime.emit(ils.Metrics())
-        // 	mb.metricMongodbLockAcquireWaitCount.emit(ils.Metrics())
-        // 	mb.metricMongodbLockDeadlockCount.emit(ils.Metrics())
-        // 	mb.metricMongodbMemoryUsage.emit(ils.Metrics())
-        // 	mb.metricMongodbNetworkIoReceive.emit(ils.Metrics())
-        // 	mb.metricMongodbNetworkIoTransmit.emit(ils.Metrics())
-        // 	mb.metricMongodbNetworkRequestCount.emit(ils.Metrics())
-        // 	mb.metricMongodbObjectCount.emit(ils.Metrics())
-        // 	mb.metricMongodbOperationCount.emit(ils.Metrics())
-        // 	mb.metricMongodbOperationLatencyTime.emit(ils.Metrics())
-        // 	mb.metricMongodbOperationReplCount.emit(ils.Metrics())
-        // 	mb.metricMongodbOperationTime.emit(ils.Metrics())
-        // 	mb.metricMongodbSessionCount.emit(ils.Metrics())
-        // 	mb.metricMongodbStorageSize.emit(ils.Metrics())
-        // 	mb.metricMongodbUptime.emit(ils.Metrics())
-        //
-        // 	for _, op := range rmo {
-        // 		op(rm)
-        // 	}
-        // 	for attr, filter := range mb.resourceAttributeIncludeFilter {
-        // 		if val, ok := rm.Resource().Attributes().Get(attr); ok && !filter.Matches(val.AsString()) {
-        // 			return
-        // 		}
-        // 	}
-        // 	for attr, filter := range mb.resourceAttributeExcludeFilter {
-        // 		if val, ok := rm.Resource().Attributes().Get(attr); ok && filter.Matches(val.AsString()) {
-        // 			return
-        // 		}
-        // 	}
-        //
-        // 	if ils.Metrics().Len() > 0 {
-        // 		mb.updateCapacity(rm)
-        // 		rm.MoveTo(mb.metricsBuffer.ResourceMetrics().AppendEmpty())
-        // 	}
-    }
+    // /// EmitForResource saves all the generated metrics under a new resource and updates the internal state to be ready for
+    // // recording another set of data points as part of another resource. This function can be helpful when one scraper
+    // // needs to emit metrics from several resources. Otherwise calling this function is not required,
+    // // just `Emit` function can be called instead.
+    // // Resource attributes should be provided as ResourceMetricsOption arguments.
+    // pub fn emit_for_resource(&mut self, resource: Resource) -> ResourceMetrics {
+    //     let mut metrics = ScopeMetrics {
+    //         scope: LIBRARY.clone(),
+    //         metrics: vec![],
+    //     };
+    //
+    //     metrics.metrics.push(self.database_count.emit());
+    //     metrics.metrics.push(self.operation_time.emit());
+    //     metrics.metrics.push(self.index_accesses.emit());
+    //
+    //     for metric in self.server_status_metrics.iter_mut() {
+    //         metrics.metrics.push(metric.emit());
+    //     }
+    //     for metric in self.db_stats_metrics.iter_mut() {
+    //         metrics.metrics.push(metric.emit());
+    //     }
+    //     for metric in self.db_server_status_metrics.iter_mut() {
+    //         metrics.metrics.push(metric.emit());
+    //     }
+    //     debug!("emitted {} metrics", metrics.metrics.len());
+    //
+    //     let resource_metrics = ResourceMetrics {
+    //         resource,
+    //         scope_metrics: vec![metrics],
+    //     };
+    //     resource_metrics
+    // }
 }
 
-// return ResourceAttributesConfig{
-// 		Database: ResourceAttributeConfig{
-// 			Enabled: true,
-// 		},
-// 		ServerAddress: ResourceAttributeConfig{
-// 			Enabled: true,
-// 		},
-// 		ServerPort: ResourceAttributeConfig{
-// 			Enabled: false,
-// 		},
-// 	}
-
-// // ResourceAttributeConfig provides common config for a particular resource attribute.
-// type ResourceAttributeConfig struct {
-// 	Enabled bool `mapstructure:"enabled"`
-// 	// Experimental: MetricsInclude defines a list of filters for attribute values.
-// 	// If the list is not empty, only metrics with matching resource attribute values will be emitted.
-// 	MetricsInclude []filter.Config `mapstructure:"metrics_include"`
-// 	// Experimental: MetricsExclude defines a list of filters for attribute values.
-// 	// If the list is not empty, metrics with matching resource attribute values will not be emitted.
-// 	// MetricsInclude has higher priority than MetricsExclude.
-// 	MetricsExclude []filter.Config `mapstructure:"metrics_exclude"`
-//
-// 	enabledSetByUser bool
-// }
-
 pub struct ResourceAttributesConfig {
-    database: String,
+    database: Option<String>,
     server_address: String,
     server_port: u16,
 }
 
 impl ResourceAttributesConfig {
     pub fn to_resource(self) -> Resource {
-        Resource::new([
-            KeyValue::new("database", self.database),
-            KeyValue::new("server.address", self.server_address),
-            KeyValue::new("server.port", Value::I64(self.server_port.into())),
-        ])
+        let mut attributes = [
+            Some(KeyValue::new("server.address", self.server_address)),
+            Some(KeyValue::new(
+                "server.port",
+                Value::I64(self.server_port.into()),
+            )),
+            self.database.map(|db| KeyValue::new("database", db)),
+        ];
+        Resource::new(attributes.into_iter().filter_map(|attr| attr))
     }
 }
 
@@ -424,10 +398,12 @@ pub async fn get_index_stats(
     // let index_stats = index_stats.try_collect::<bson::Bson>().await?;
     let index_stats: Vec<bson::Bson> = cursor
         .await?
-        .map(|doc| {
-            doc.map_err(eyre::Report::from)
-                .and_then(|doc| bson::from_document(doc).map_err(eyre::Report::from))
-        })
+        .map_ok(|doc| bson::Bson::from(doc))
+        // .map(|doc| bson::Bson::from(doc))
+        // .map(|doc| {
+        //     doc.map_err(eyre::Report::from)
+        //         .and_then(|doc| bson::from_document(doc).map_err(eyre::Report::from))
+        // })
         .try_collect()
         .await?;
     Ok(index_stats)
@@ -526,37 +502,70 @@ impl MetricScraper {
         };
 
         self.metrics.database_count.record(database_count, &config);
-        for metric in self.metrics.admin_metrics.iter_mut() {
+        for metric in self.metrics.server_status_metrics.iter_mut() {
             metric.record(&server_status, &config, errors);
         }
 
-        // return c.RunCommand(ctx, "admin", bson.M{"top": 1})
         let top_stats = self
             .client
             .database("admin")
             .run_command(bson::doc! { "top": 1})
             .await?;
+
         let top_stats = bson::from_document(top_stats)?;
         self.metrics
             .operation_time
             .record(&top_stats, &config, errors);
-        // self.metrics
-        //     .record_admin_metrics(&server_status, &config, errors)?;
 
         let database_name = "luup";
         let collection_name = "users";
-        // self.record_index_stats(database_name, collection_name, &config, errors)
-        //     .await?;
 
         // create resource
-        let resource = ResourceAttributesConfig {
+        let global_resource = ResourceAttributesConfig {
             server_address: server_address.to_string(),
             server_port,
-            database: "".to_string(),
+            database: None,
         }
         .to_resource();
-        let metrics = self.metrics.emit_for_resource(resource);
 
+        // let metrics = self.metrics.emit_for_resource(resource);
+        let mut global_metrics = ScopeMetrics {
+            scope: LIBRARY.clone(),
+            metrics: vec![],
+        };
+
+        global_metrics
+            .metrics
+            .push(self.metrics.database_count.emit());
+        global_metrics
+            .metrics
+            .push(self.metrics.operation_time.emit());
+        for metric in self.metrics.server_status_metrics.iter_mut() {
+            global_metrics.metrics.push(metric.emit());
+        }
+
+        let mut metric_names = global_metrics
+            .metrics
+            .iter()
+            .filter(|metric| metric.num_datapoints().unwrap_or(0) > 0)
+            .map(|metric| &metric.name)
+            .collect::<Vec<_>>();
+        metric_names.sort();
+
+        debug!("global: emitted {} metrics", metric_names.len());
+        for (idx, metric_name) in metric_names.iter().enumerate() {
+            debug!("[{}] = {}", idx, metric_name);
+        }
+
+        let global_resource_metrics = ResourceMetrics {
+            resource: global_resource,
+            scope_metrics: vec![global_metrics],
+        };
+
+        // resource_metrics
+        // }
+
+        // collect metrics for each database
         for database_name in database_names.iter() {
             config.database_name = Some(database_name.clone());
             let db_stats = get_db_stats(&self.client, database_name).await?;
@@ -565,24 +574,104 @@ impl MetricScraper {
             // } else {
             // 	s.recordDBStats(now, dbStats, databaseName, errs)
             // }
-            for metric in self.metrics.per_db_metrics.iter_mut() {
+            for metric in self.metrics.db_stats_metrics.iter_mut() {
                 metric.record(&db_stats, &config, errors);
             }
 
             let db_server_status = get_server_status(&self.client, database_name).await?;
+            for metric in self.metrics.db_server_status_metrics.iter_mut() {
+                metric.record(&db_server_status, &config, errors);
+            }
+
+            let collection_names = self
+                .client
+                .database(database_name)
+                .list_collection_names()
+                .await?;
+
+            if database_name != "local" {
+                for collection_name in collection_names {
+                    let index_stats =
+                        get_index_stats(&self.client, database_name, &collection_name).await?;
+                    self.metrics.index_accesses.record(
+                        &index_stats,
+                        database_name,
+                        &collection_name,
+                        &config,
+                        errors,
+                    );
+                    // if err != nil {
+                    // 	errs.AddPartial(1, fmt.Errorf("failed to fetch index stats metrics: %w", err))
+                    // 	return
+                    // }
+                    // s.recordIndexStats(now, indexStats, databaseName, collectionName, errs)
+                }
+            }
+
+            let db_resource = ResourceAttributesConfig {
+                server_address: server_address.to_string(),
+                server_port,
+                database: Some(database_name.to_string()),
+            }
+            .to_resource();
+
+            // let metrics = self.metrics.emit_for_resource(resource);
+            let mut db_metrics = ScopeMetrics {
+                scope: LIBRARY.clone(),
+                metrics: vec![],
+            };
+
+            db_metrics.metrics.push(self.metrics.index_accesses.emit());
+            for metric in self.metrics.db_stats_metrics.iter_mut() {
+                db_metrics.metrics.push(metric.emit());
+            }
+            for metric in self.metrics.db_server_status_metrics.iter_mut() {
+                db_metrics.metrics.push(metric.emit());
+            }
+
+            let mut metric_names = db_metrics
+                .metrics
+                .iter()
+                .filter(|metric| metric.num_datapoints().unwrap_or(0) > 0)
+                .map(|metric| &metric.name)
+                .collect::<Vec<_>>();
+            metric_names.sort();
+
+            debug!("{:?} emitted {} metrics", database_name, metric_names.len());
+            for (idx, metric_name) in metric_names.iter().enumerate() {
+                debug!("[{}] = {}", idx, metric_name);
+            }
+
+            let db_resource_metrics = ResourceMetrics {
+                resource: db_resource,
+                scope_metrics: vec![db_metrics],
+            };
+
             // if err != nil {
             // 	errs.AddPartial(1, fmt.Errorf("failed to fetch server status metrics: %w", err))
             // 	return
             // }
-            // s.recordNormalServerStats(now, serverStatus, databaseName, errs)
-            // s.recordConnections(now, doc, dbName, errs)
-            // s.recordDocumentOperations(now, doc, dbName, errs)
-            // s.recordMemoryUsage(now, doc, dbName, errs)
-            // s.recordLockAcquireCounts(now, doc, dbName, errs)
-            // s.recordLockAcquireWaitCounts(now, doc, dbName, errs)
-            // s.recordLockTimeAcquiringMicros(now, doc, dbName, errs)
-            // s.recordLockDeadlockCount(now, doc, dbName, errs)
         }
+
+        // // create resource
+        // let resource = ResourceAttributesConfig {
+        //     server_address: server_address.to_string(),
+        //     server_port,
+        //     database: Some(database_name.to_string()),
+        // }
+        // .to_resource();
+        // let metrics = self.metrics.emit_for_resource(resource);
+
+        // rb.SetServerAddress(serverAddress)
+        // rb.SetServerPort(serverPort)
+        // rb.SetDatabase(dbName)
+        // s.mb.EmitForResource(metadata.WithResource(rb.Emit()))
+        // for metric in self.per_db_stats_metrics.iter_mut() {
+        //     metrics.metrics.push(metric.emit());
+        // }
+        // for metric in self.per_db_server_stats_metrics.iter_mut() {
+        //     metrics.metrics.push(metric.emit());
+        // }
 
         // debug log errors
         for err in errors {
@@ -622,12 +711,4 @@ pub async fn record_metrics(client: Client) -> eyre::Result<()> {
     };
     scraper.record_metrics(&mut errors).await?;
     Ok(())
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn it_works() {}
 }

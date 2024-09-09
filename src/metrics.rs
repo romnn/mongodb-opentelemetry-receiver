@@ -11,25 +11,27 @@ use tracing::trace;
 use crate::{attributes, doc};
 
 #[derive(thiserror::Error, Debug)]
-pub enum Error {
-    #[error("failed to collect {metric:?} for db {db:?}: {source}")]
-    CollectMetric {
-        metric: &'static str,
-        db: Option<String>,
-        #[source]
-        source: doc::Error,
-    },
+#[error("failed to collect {metric:?} for db {db:?}: {source}")]
+pub struct Error {
+    metric: &'static str,
+    db: Option<String>,
+    #[source]
+    source: doc::Error,
+}
+
+impl Error {
+    pub fn new(metric: &'static str, config: &Config, err: doc::Error) -> Self {
+        Self {
+            metric,
+            db: config.database_name.clone(),
+            source: err,
+        }
+    }
 }
 
 impl Error {
     pub fn partial_match(&self) -> Option<&doc::Match> {
-        match self {
-            Self::CollectMetric {
-                source: doc::Error { path, source },
-                ..
-            } => source.partial_match(),
-            _ => None,
-        }
+        self.source.source.partial_match()
     }
 }
 
@@ -179,11 +181,7 @@ impl Record for CollectionCount {
                     ..datapoint(value, config)
                 });
             }
-            Err(err) => errors.push(Error::CollectMetric {
-                metric: self.0.descriptor.name,
-                db: config.database_name.clone(),
-                source: err.into(),
-            }),
+            Err(err) => errors.push(Error::new(self.0.descriptor.name, config, err)),
         }
     }
 }
@@ -215,11 +213,7 @@ impl Record for DataSize {
                     ..datapoint(value, config)
                 });
             }
-            Err(err) => errors.push(Error::CollectMetric {
-                metric: self.0.descriptor.name,
-                db: config.database_name.clone(),
-                source: err.into(),
-            }),
+            Err(err) => errors.push(Error::new(self.0.descriptor.name, config, err)),
         }
     }
 }
@@ -286,11 +280,7 @@ impl Record for ConnectionCount {
                         ..datapoint(value, config)
                     });
                 }
-                Err(err) => errors.push(Error::CollectMetric {
-                    metric: self.0.descriptor.name,
-                    db: config.database_name.clone(),
-                    source: err.into(),
-                }),
+                Err(err) => errors.push(Error::new(self.0.descriptor.name, config, err)),
             }
         }
     }
@@ -337,11 +327,7 @@ impl Record for CacheOperations {
                     value
                 }
                 Err(err) => {
-                    errors.push(Error::CollectMetric {
-                        metric: self.0.descriptor.name,
-                        db: config.database_name.clone(),
-                        source: err.into(),
-                    });
+                    errors.push(Error::new(self.0.descriptor.name, config, err));
                     return;
                 }
             };
@@ -353,11 +339,7 @@ impl Record for CacheOperations {
         ) {
             Ok(cache_total) => cache_total,
             Err(err) => {
-                errors.push(Error::CollectMetric {
-                    metric: self.0.descriptor.name,
-                    db: config.database_name.clone(),
-                    source: err.into(),
-                });
+                errors.push(Error::new(self.0.descriptor.name, config, err));
                 return;
             }
         };
@@ -396,11 +378,7 @@ impl Record for CursorCount {
                     ..datapoint(value, config)
                 });
             }
-            Err(err) => errors.push(Error::CollectMetric {
-                metric: self.0.descriptor.name,
-                db: config.database_name.clone(),
-                source: err.into(),
-            }),
+            Err(err) => errors.push(Error::new(self.0.descriptor.name, config, err)),
         }
     }
 }
@@ -432,11 +410,7 @@ impl Record for CursorTimeouts {
                     ..datapoint(value, config)
                 });
             }
-            Err(err) => errors.push(Error::CollectMetric {
-                metric: self.0.descriptor.name,
-                db: config.database_name.clone(),
-                source: err.into(),
-            }),
+            Err(err) => errors.push(Error::new(self.0.descriptor.name, config, err)),
         }
     }
 }
@@ -528,8 +502,12 @@ impl Operation {
 
 impl Record for DocumentOperations {
     fn record(&mut self, stats: &bson::Bson, config: &Config, errors: &mut Vec<Error>) -> () {
-        for operation in Operation::iter() {
-            match crate::get_i64!(stats, "metrics", "document", operation.as_str()) {
+        for (key, operation) in [
+            ("inserted", Operation::Insert),
+            ("updated", Operation::Update),
+            ("deleted", Operation::Delete),
+        ] {
+            match crate::get_i64!(stats, "metrics", "document", key) {
                 Ok(value) => {
                     self.0.data.data_points.push(DataPoint {
                         attributes: vec![KeyValue::new(
@@ -539,11 +517,7 @@ impl Record for DocumentOperations {
                         ..datapoint(value, config)
                     });
                 }
-                Err(err) => errors.push(Error::CollectMetric {
-                    metric: self.0.descriptor.name,
-                    db: config.database_name.clone(),
-                    source: err.into(),
-                }),
+                Err(err) => errors.push(Error::new(self.0.descriptor.name, config, err)),
             }
         }
     }
@@ -582,11 +556,7 @@ impl Record for Extent {
                     ..datapoint(value, config)
                 });
             }
-            Err(err) => errors.push(Error::CollectMetric {
-                metric: self.0.descriptor.name,
-                db: config.database_name.clone(),
-                source: err.into(),
-            }),
+            Err(err) => errors.push(Error::new(self.0.descriptor.name, config, err)),
         }
     }
 }
@@ -621,11 +591,7 @@ impl Record for GlobalLockTime {
                     ..datapoint(lock_held_time_millis, config)
                 });
             }
-            Err(err) => errors.push(Error::CollectMetric {
-                metric: self.0.descriptor.name,
-                db: config.database_name.clone(),
-                source: err.into(),
-            }),
+            Err(err) => errors.push(Error::new(self.0.descriptor.name, config, err)),
         }
     }
 }
@@ -658,11 +624,7 @@ impl Record for Health {
                     ..datapoint(value, config)
                 });
             }
-            Err(err) => errors.push(Error::CollectMetric {
-                metric: self.0.descriptor.name,
-                db: config.database_name.clone(),
-                source: err.into(),
-            }),
+            Err(err) => errors.push(Error::new(self.0.descriptor.name, config, err)),
         }
     }
 }
@@ -702,11 +664,7 @@ impl IndexAccesses {
                 Ok(value) => {
                     index_accesses_total += value;
                 }
-                Err(err) => errors.push(Error::CollectMetric {
-                    metric: self.0.descriptor.name,
-                    db: config.database_name.clone(),
-                    source: err.into(),
-                }),
+                Err(err) => errors.push(Error::new(self.0.descriptor.name, config, err)),
             }
         }
         self.0.data.data_points.push(DataPoint {
@@ -745,11 +703,7 @@ impl Record for IndexCount {
                     ..datapoint(value, config)
                 });
             }
-            Err(err) => errors.push(Error::CollectMetric {
-                metric: self.0.descriptor.name,
-                db: config.database_name.clone(),
-                source: err.into(),
-            }),
+            Err(err) => errors.push(Error::new(self.0.descriptor.name, config, err)),
         }
     }
 }
@@ -782,11 +736,7 @@ impl Record for IndexSize {
                     ..datapoint(value, config)
                 });
             }
-            Err(err) => errors.push(Error::CollectMetric {
-                metric: self.0.descriptor.name,
-                db: config.database_name.clone(),
-                source: err.into(),
-            }),
+            Err(err) => errors.push(Error::new(self.0.descriptor.name, config, err)),
         }
     }
 }
@@ -920,13 +870,7 @@ fn record_lock_metric(
                     // mongoDB only publishes this lock metric is it is available.
                     // do not raise error when key is not found
                 }
-                Err(err) => {
-                    errors.push(Error::CollectMetric {
-                        metric: metric.descriptor.name,
-                        db: config.database_name.clone(),
-                        source: err.into(),
-                    });
-                }
+                Err(err) => errors.push(Error::new(metric.descriptor.name, config, err)),
             }
         }
     }
@@ -1093,11 +1037,7 @@ impl Record for MemoryUsage {
                         ..datapoint(mem_usage_bytes, config)
                     });
                 }
-                Err(err) => errors.push(Error::CollectMetric {
-                    metric: self.0.descriptor.name,
-                    db: config.database_name.clone(),
-                    source: err.into(),
-                }),
+                Err(err) => errors.push(Error::new(self.0.descriptor.name, config, err)),
             }
         }
     }
@@ -1131,11 +1071,7 @@ impl Record for NetworkIn {
                     ..datapoint(value, config)
                 });
             }
-            Err(err) => errors.push(Error::CollectMetric {
-                metric: self.0.descriptor.name,
-                db: config.database_name.clone(),
-                source: err.into(),
-            }),
+            Err(err) => errors.push(Error::new(self.0.descriptor.name, config, err)),
         }
     }
 }
@@ -1168,11 +1104,7 @@ impl Record for NetworkOut {
                     ..datapoint(value, config)
                 });
             }
-            Err(err) => errors.push(Error::CollectMetric {
-                metric: self.0.descriptor.name,
-                db: config.database_name.clone(),
-                source: err.into(),
-            }),
+            Err(err) => errors.push(Error::new(self.0.descriptor.name, config, err)),
         }
     }
 }
@@ -1205,11 +1137,7 @@ impl Record for NetworkRequestCount {
                     ..datapoint(value, config)
                 });
             }
-            Err(err) => errors.push(Error::CollectMetric {
-                metric: self.0.descriptor.name,
-                db: config.database_name.clone(),
-                source: err.into(),
-            }),
+            Err(err) => errors.push(Error::new(self.0.descriptor.name, config, err)),
         }
     }
 }
@@ -1242,11 +1170,8 @@ impl Record for ObjectCount {
                     ..datapoint(value, config)
                 });
             }
-            Err(err) => errors.push(Error::CollectMetric {
-                metric: self.0.descriptor.name,
-                db: config.database_name.clone(),
-                source: err.into(),
-            }),
+
+            Err(err) => errors.push(Error::new(self.0.descriptor.name, config, err)),
         }
     }
 }
@@ -1285,11 +1210,7 @@ impl Record for OperationCount {
                         ..datapoint(value, config)
                     });
                 }
-                Err(err) => errors.push(Error::CollectMetric {
-                    metric: self.0.descriptor.name,
-                    db: config.database_name.clone(),
-                    source: err.into(),
-                }),
+                Err(err) => errors.push(Error::new(self.0.descriptor.name, config, err)),
             }
         }
     }
@@ -1358,11 +1279,7 @@ impl Record for OperationLatencyTime {
                         ..datapoint(value, config)
                     });
                 }
-                Err(err) => errors.push(Error::CollectMetric {
-                    metric: self.0.descriptor.name,
-                    db: config.database_name.clone(),
-                    source: err.into(),
-                }),
+                Err(err) => errors.push(Error::new(self.0.descriptor.name, config, err)),
             }
         }
     }
@@ -1401,11 +1318,7 @@ impl Record for OperationLatencyOps {
                         ..datapoint(value, config)
                     });
                 }
-                Err(err) => errors.push(Error::CollectMetric {
-                    metric: self.0.descriptor.name,
-                    db: config.database_name.clone(),
-                    source: err.into(),
-                }),
+                Err(err) => errors.push(Error::new(self.0.descriptor.name, config, err)),
             }
         }
     }
@@ -1445,11 +1358,7 @@ impl Record for OperationReplCount {
                         ..datapoint(value, config)
                     });
                 }
-                Err(err) => errors.push(Error::CollectMetric {
-                    metric: self.0.descriptor.name,
-                    db: config.database_name.clone(),
-                    source: err.into(),
-                }),
+                Err(err) => errors.push(Error::new(self.0.descriptor.name, config, err)),
             }
         }
     }
@@ -1522,11 +1431,7 @@ impl Record for OperationTime {
         let collection_path_names = match collection_path_names(stats) {
             Ok(collection_path_names) => collection_path_names,
             Err(err) => {
-                errors.push(Error::CollectMetric {
-                    metric: self.0.descriptor.name,
-                    db: config.database_name.clone(),
-                    source: err.into(),
-                });
+                errors.push(Error::new(self.0.descriptor.name, config, err));
                 return;
             }
         };
@@ -1537,11 +1442,7 @@ impl Record for OperationTime {
             match aggregate_operation_time_values(stats, &collection_path_names) {
                 Ok(collection_path_names) => collection_path_names,
                 Err(err) => {
-                    errors.push(Error::CollectMetric {
-                        metric: self.0.descriptor.name,
-                        db: config.database_name.clone(),
-                        source: err.into(),
-                    });
+                    errors.push(Error::new(self.0.descriptor.name, config, err));
                     return;
                 }
             };
@@ -1587,11 +1488,7 @@ impl Record for SessionCount {
                     ..datapoint(value, config)
                 });
             }
-            Err(err) => errors.push(Error::CollectMetric {
-                metric: self.0.descriptor.name,
-                db: config.database_name.clone(),
-                source: err.into(),
-            }),
+            Err(err) => errors.push(Error::new(self.0.descriptor.name, config, err)),
         }
     }
 }
@@ -1625,11 +1522,7 @@ impl Record for StorageSize {
                     ..datapoint(value, config)
                 });
             }
-            Err(err) => errors.push(Error::CollectMetric {
-                metric: self.0.descriptor.name,
-                db: config.database_name.clone(),
-                source: err.into(),
-            }),
+            Err(err) => errors.push(Error::new(self.0.descriptor.name, config, err)),
         }
     }
 }
@@ -1663,11 +1556,7 @@ impl Record for Uptime {
                     ..datapoint(value, config)
                 });
             }
-            Err(err) => errors.push(Error::CollectMetric {
-                metric: self.0.descriptor.name,
-                db: config.database_name.clone(),
-                source: err.into(),
-            }),
+            Err(err) => errors.push(Error::new(self.0.descriptor.name, config, err)),
         }
     }
 }
@@ -1675,5 +1564,24 @@ impl Record for Uptime {
 impl EmitMetric for Uptime {
     fn emit(&mut self) -> Metric {
         self.0.emit()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn compare_semver_versions() {
+        assert!(semver::Version::parse("7.0.12").unwrap() >= semver::Version::new(4, 4, 0));
+        assert!(
+            semver::Version::parse("7.0.12").unwrap() >= semver::Version::parse("4.4.0").unwrap()
+        );
+        assert!(
+            semver::Version::parse("4.4.0").unwrap() >= semver::Version::parse("4.4.0").unwrap()
+        );
+        assert!(
+            semver::Version::parse("4.3.0").unwrap() < semver::Version::parse("4.4.0").unwrap()
+        );
     }
 }
