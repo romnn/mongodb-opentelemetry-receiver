@@ -1,12 +1,14 @@
 use clap::Parser;
 use color_eyre::eyre;
-use mongodb::{bson, Client};
-
+use mongodb_opentelemetry_receiver as collector;
+// use mongodb_opentelemetry_receiver::{
+//     // scrape::ScrapeScheduler, MetricScraper, Options as MongoOptions,
+// };
 use opentelemetry::trace::TracerProvider as _;
 use opentelemetry_sdk::trace::TracerProvider;
-use tracing::{debug, info};
+use std::path::PathBuf;
+use tracing::{info, warn};
 use tracing_subscriber::layer::SubscriberExt;
-use tracing_subscriber::Registry;
 
 #[derive(Debug, Parser)]
 #[command(author, version, about, long_about = None)]
@@ -14,33 +16,22 @@ use tracing_subscriber::Registry;
 pub struct Options {
     #[arg(long = "uri", help = "MongoDB connection URI")]
     pub connection_uri: String,
-    // #[arg(long = "database", aliases = ["db"], help = "MongoDB database name")]
-    // pub database_name: Option<String>,
-    // #[arg(long = "collection", help = "MongoDB collection names")]
-    // pub collection_names: Vec<String>,
-    // #[arg(long = "confirm", help = "Confirm changes interactively")]
-    // pub confirm: Option<bool>,
-    // #[arg(
-    //     long = "dry-run",
-    //     default_value = "false",
-    //     help = "Run in dry run mode"
-    // )]
-    // pub dry_run: bool,
+    #[arg(long = "interval", help = "Scrape interval")]
+    pub interval_secs: Option<usize>,
+    #[arg(short = 'c', long = "config", aliases = ["conf"],  help = "Path to YAML config file")]
+    pub config_path: Option<PathBuf>,
 }
 
 pub const APPLICATION_NAME: &'static str = "mongodb-opentelemetry-receiver";
 
-#[tokio::main]
-async fn main() -> eyre::Result<()> {
-    color_eyre::install()?;
-
-    // Create a new OpenTelemetry trace pipeline that prints to stdout
+fn setup_telemetry() {
+    // create a new OpenTelemetry trace pipeline that prints to stdout
     let provider = TracerProvider::builder()
         // .with_simple_exporter(stdout::SpanExporter::default())
         .build();
     let tracer = provider.tracer(APPLICATION_NAME);
 
-    // Create a tracing layer with the configured tracer
+    // create a tracing layer with the configured tracer
     let telemetry = tracing_opentelemetry::layer().with_tracer(tracer);
 
     // Use the tracing subscriber `Registry`, or any other subscriber
@@ -67,22 +58,66 @@ async fn main() -> eyre::Result<()> {
     //         .json()
     //         .with_writer(non_blocking),
     // );
+}
 
-    let start = std::time::Instant::now();
+#[tokio::main]
+async fn main() -> eyre::Result<()> {
+    color_eyre::install()?;
+    setup_telemetry();
+
+    let (shutdown_tx, mut shutdown_rx) = tokio::sync::watch::channel(false);
+
+    tokio::spawn(async move {
+        tokio::signal::ctrl_c().await.unwrap();
+        warn!("received ctr-c");
+        info!("initiate graceful shutdown");
+        shutdown_tx.send(true).unwrap();
+    });
+
+    // parse config
     let options = Options::parse();
+    // dbg!(&options);
 
-    let client = Client::with_uri_str(&options.connection_uri).await?;
+    let config = if let Some(path) = options.config_path {
+        let config = collector::config::Config::from_file(path)?;
+        config
+    } else {
+        collector::config::Config::default()
+    };
 
-    // Send a ping to confirm a successful connection
-    client
-        .database("admin")
-        .run_command(bson::doc! { "ping": 1 })
-        .await?;
-    info!(uri = options.connection_uri, "connected to database");
+    // dbg!(&config);
+    // info!(?config);
 
-    mongodb_opentelemetry_receiver::record_metrics(client).await?;
+    let pipeline_manager = collector::pipeline::PipelineManager::new(config)?;
+    pipeline_manager.start(shutdown_rx).await?;
 
-    debug!("completed in {:?}", start.elapsed());
+    return Ok(());
 
+    let options = mongodb_opentelemetry_receiver::mongodb::Options {
+        connection_uri: options.connection_uri,
+    };
+
+    // let scraper_future = MetricScraper::new(&options).await?;
+    let scraper_future = collector::mongodb::MetricScraper::new(&options);
+    let scraper = tokio::select! {
+        scraper = scraper_future => scraper,
+        _ = shutdown_rx.changed() => return Ok(()),
+    };
+    // _ = tokio::signal::ctrl_c() => return Ok(()),
+    let scraper = scraper?;
+
+    let interval = std::time::Duration::from_secs(30);
+    let scheduler = collector::scrape::ScrapeScheduler::new(scraper, interval, shutdown_rx);
+    let scheduler = std::sync::Arc::new(scheduler);
+    // let scheduler_clone = scheduler.clone();
+
+    // tokio::spawn(async move {
+    //     tokio::signal::ctrl_c().await.unwrap();
+    //     // shutdown
+    //     scheduler_clone.stop().await;
+    // });
+
+    info!(?interval, "starting scraper");
+    scheduler.start().await;
     Ok(())
 }

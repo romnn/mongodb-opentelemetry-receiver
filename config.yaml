@@ -1,0 +1,46 @@
+receivers:
+  mongodb:
+    hosts:
+      - endpoint: "localhost:27017/?directConnection=true"
+    metrics:
+      mongodb.operation.latency.time:
+        enabled: true
+    username: ""
+    password: ""
+    collection_interval: 60s
+    initial_delay: 0s
+    tls:
+      insecure: true
+  mongodb/2:
+    hosts:
+      - endpoint: "mongodb://other-host:27017"
+processors:
+  batch:
+    send_batch_size: 100
+    timeout: 10s
+exporters:
+  debug:
+    verbosity: detailed
+  otlp:
+    endpoint: localhost
+    tls:
+      insecure: true
+      # prometheus:
+      #   endpoint: "0.0.0.0:1234"
+      #   send_timestamps: true
+      #   metric_expiration: 180m
+      #   enable_open_metrics: true
+      #   add_metric_suffixes: false
+      #   resource_to_telemetry_conversion:
+      #     enabled: true
+service:
+  pipelines:
+    metrics:
+      # receivers: [otlp]
+      receivers: [mongodb]
+      # receivers: [mongodb]
+      processors: [batch]
+      # exporters: [debug]
+      # exporters: [prometheus]
+      exporters: [otlp]
+      # exporters: [otlp, prometheus]

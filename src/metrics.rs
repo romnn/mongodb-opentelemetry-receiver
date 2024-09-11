@@ -1,3 +1,4 @@
+use crate::{attributes, doc};
 use color_eyre::eyre;
 use mongodb::bson;
 use opentelemetry::KeyValue;
@@ -8,7 +9,32 @@ use std::collections::HashMap;
 use std::time::SystemTime;
 use tracing::trace;
 
-use crate::{attributes, doc};
+#[derive(Debug, Copy, Clone, Hash, PartialEq, Eq, PartialOrd, Ord)]
+pub enum Unit {
+    Bytes,
+    Milliseconds,
+    Microseconds,
+    Dimensionless,
+    Numeric(&'static str),
+}
+
+impl From<Unit> for &'static str {
+    fn from(value: Unit) -> Self {
+        match value {
+            Unit::Bytes => "By",
+            Unit::Milliseconds => "ms",
+            Unit::Microseconds => "us", // "microseconds",
+            Unit::Dimensionless => "1",
+            Unit::Numeric(unit) => unit,
+        }
+    }
+}
+
+impl Unit {
+    pub fn as_str(&self) -> &'static str {
+        (*self).into()
+    }
+}
 
 #[derive(thiserror::Error, Debug)]
 #[error("failed to collect {metric:?} for db {db:?}: {source}")]
@@ -49,7 +75,7 @@ pub struct Config {
     pub version: semver::Version,
 }
 
-pub trait Record: std::fmt::Debug + EmitMetric {
+pub trait Record: EmitMetric + std::fmt::Debug + Send + Sync + 'static {
     fn record(
         &mut self,
         server_status: &bson::Bson,
@@ -58,7 +84,7 @@ pub trait Record: std::fmt::Debug + EmitMetric {
     ) -> ();
 }
 
-pub trait EmitMetric {
+pub trait EmitMetric: Send + Sync + 'static {
     fn emit(&mut self) -> Metric;
 }
 
@@ -168,7 +194,7 @@ impl Default for CollectionCount {
         Self(MongoMetric::sum(Descriptor {
             name: "mongodb.collection.count",
             description: "The number of collections.",
-            unit: "{collections}",
+            unit: Unit::Numeric("{collection}").into(),
         }))
     }
 }
@@ -200,7 +226,7 @@ impl Default for DataSize {
         Self(MongoMetric::sum(Descriptor {
             name: "mongodb.data.size",
             description: "The size of the collection. Data compression does not affect this value.",
-            unit: "By",
+            unit: Unit::Bytes.into(),
         }))
     }
 }
@@ -232,7 +258,7 @@ impl Default for ConnectionCount {
         Self(MongoMetric::sum(Descriptor {
             name: "mongodb.connection.count",
             description: "The number of connections.",
-            unit: "{connections}",
+            unit: Unit::Numeric("{connection}").into(),
         }))
     }
 }
@@ -300,7 +326,7 @@ impl Default for CacheOperations {
         let mut metric = MongoMetric::sum(Descriptor {
             name: "mongodb.cache.operations",
             description: "The number of cache operations of the instance.",
-            unit: "{operations}",
+            unit: Unit::Numeric("{operation}").into(),
         });
         metric.data.is_monotonic = true;
         Self(metric)
@@ -365,7 +391,7 @@ impl Default for CursorCount {
         Self(MongoMetric::sum(Descriptor {
             name: "mongodb.cursor.count",
             description: "The number of open cursors maintained for clients.",
-            unit: "{cursors}",
+            unit: Unit::Numeric("{cursor}").into(),
         }))
     }
 }
@@ -397,7 +423,7 @@ impl Default for CursorTimeouts {
         Self(MongoMetric::sum(Descriptor {
             name: "mongodb.cursor.timeout.count",
             description: "The number of cursors that have timed out.",
-            unit: "{cursors}",
+            unit: Unit::Numeric("{cursor}").into(),
         }))
     }
 }
@@ -429,7 +455,7 @@ impl Default for DatabaseCount {
         Self(MongoMetric::sum(Descriptor {
             name: "mongodb.database.count",
             description: "The number of existing databases.",
-            unit: "{databases}",
+            unit: Unit::Numeric("{database}").into(),
         }))
     }
 }
@@ -456,7 +482,7 @@ impl Default for DocumentOperations {
         Self(MongoMetric::sum(Descriptor {
             name: "mongodb.document.operation.count",
             description: "The number of document operations executed.",
-            unit: "{documents}",
+            unit: Unit::Numeric("{document}").into(),
         }))
     }
 }
@@ -537,7 +563,7 @@ impl Default for Extent {
         Self(MongoMetric::sum(Descriptor {
             name: "mongodb.extent.count",
             description: "The number of extents.",
-            unit: "{extents}",
+            unit: Unit::Numeric("{extent}").into(),
         }))
     }
 }
@@ -575,7 +601,7 @@ impl Default for GlobalLockTime {
         let mut metric = MongoMetric::sum(Descriptor {
             name: "mongodb.global_lock.time",
             description: "The time the global lock has been held.",
-            unit: "ms",
+            unit: Unit::Milliseconds.into(),
         });
         metric.data.is_monotonic = true;
         Self(metric)
@@ -610,7 +636,7 @@ impl Default for Health {
         let mut metric = MongoMetric::gauge(Descriptor {
             name: "mongodb.health",
             description: "The health status of the server.",
-            unit: "1",
+            unit: Unit::Dimensionless.into(),
         });
         Self(metric)
     }
@@ -643,7 +669,7 @@ impl Default for IndexAccesses {
         let mut metric = MongoMetric::sum(Descriptor {
             name: "mongodb.index.access.count",
             description: "The number of times an index has been accessed.",
-            unit: "{accesses}",
+            unit: Unit::Numeric("{access}").into(),
         });
         Self(metric)
     }
@@ -689,7 +715,7 @@ impl Default for IndexCount {
         let mut metric = MongoMetric::sum(Descriptor {
             name: "mongodb.index.count",
             description: "The number of indexes.",
-            unit: "{indexes}",
+            unit: Unit::Numeric("{index}").into(),
         });
         Self(metric)
     }
@@ -722,7 +748,7 @@ impl Default for IndexSize {
         let mut metric = MongoMetric::sum(Descriptor {
             name: "mongodb.index.size",
             description: "Sum of the space allocated to all indexes in the database, including free index space.",
-            unit: "By",
+            unit: Unit::Bytes.into(),
         });
         Self(metric)
     }
@@ -884,7 +910,7 @@ impl Default for LockAquireCount {
         let mut metric = MongoMetric::sum(Descriptor {
             name: "mongodb.lock.acquire.count",
             description: "Number of times the lock was acquired in the specified mode.",
-            unit: "{count}",
+            unit: Unit::Numeric("{count}").into(),
         });
         metric.data.is_monotonic = true;
         Self(metric)
@@ -911,7 +937,7 @@ impl Default for LockAquireTime {
         let mut metric = MongoMetric::sum(Descriptor {
             name: "mongodb.lock.acquire.time",
             description: "Cumulative wait time for the lock acquisitions.",
-            unit: "microseconds",
+            unit: Unit::Microseconds.into(),
         });
         metric.data.is_monotonic = true;
         Self(metric)
@@ -938,7 +964,7 @@ impl Default for LockAquireWaitCount {
         let mut metric = MongoMetric::sum(Descriptor {
             name: "mongodb.lock.acquire.wait_count",
             description: "Number of times the lock acquisitions encountered waits because the locks were held in a conflicting mode.",
-            unit: "{count}",
+            unit: Unit::Numeric("{count}").into(),
         });
         metric.data.is_monotonic = true;
         Self(metric)
@@ -965,7 +991,7 @@ impl Default for LockAquireDeadlockCount {
         let mut metric = MongoMetric::sum(Descriptor {
             name: "mongodb.lock.deadlock.count",
             description: "Number of times the lock acquisitions encountered deadlocks.",
-            unit: "{count}",
+            unit: Unit::Numeric("{count}").into(),
         });
         metric.data.is_monotonic = true;
         Self(metric)
@@ -992,7 +1018,7 @@ impl Default for MemoryUsage {
         let mut metric = MongoMetric::sum(Descriptor {
             name: "mongodb.memory.usage",
             description: "The amount of memory used.",
-            unit: "By",
+            unit: Unit::Bytes.into(),
         });
         Self(metric)
     }
@@ -1057,7 +1083,7 @@ impl Default for NetworkIn {
         let mut metric = MongoMetric::sum(Descriptor {
             name: "mongodb.network.io.receive",
             description: "The number of bytes received.",
-            unit: "By",
+            unit: Unit::Bytes.into(),
         });
         Self(metric)
     }
@@ -1090,7 +1116,7 @@ impl Default for NetworkOut {
         let mut metric = MongoMetric::sum(Descriptor {
             name: "mongodb.network.io.transmit",
             description: "The number of by transmitted.",
-            unit: "By",
+            unit: Unit::Bytes.into(),
         });
         Self(metric)
     }
@@ -1123,7 +1149,7 @@ impl Default for NetworkRequestCount {
         let mut metric = MongoMetric::sum(Descriptor {
             name: "mongodb.network.request.count",
             description: "The number of requests received by the server.",
-            unit: "{requests}",
+            unit: Unit::Numeric("{request}").into(),
         });
         Self(metric)
     }
@@ -1156,7 +1182,7 @@ impl Default for ObjectCount {
         let mut metric = MongoMetric::sum(Descriptor {
             name: "mongodb.object.count",
             description: "The number of objects.",
-            unit: "{objects}",
+            unit: Unit::Numeric("{object}").into(),
         });
         Self(metric)
     }
@@ -1190,7 +1216,7 @@ impl Default for OperationCount {
         let mut metric = MongoMetric::sum(Descriptor {
             name: "mongodb.operation.count",
             description: "The number of operations executed.",
-            unit: "{operations}",
+            unit: Unit::Numeric("{operation}").into(),
         });
         metric.data.is_monotonic = true;
         Self(metric)
@@ -1230,7 +1256,7 @@ impl Default for OperationLatencyTime {
         let mut metric = MongoMetric::gauge(Descriptor {
             name: "mongodb.operation.latency.time",
             description: "The latency of operations.",
-            unit: "us",
+            unit: Unit::Microseconds.into(),
         });
         Self(metric)
     }
@@ -1299,7 +1325,7 @@ impl Default for OperationLatencyOps {
         let mut metric = MongoMetric::sum(Descriptor {
             name: "mongodb.operation.latency.ops",
             description: "The total number of operations performed since startup.",
-            unit: "{ops}",
+            unit: Unit::Numeric("{operation}").into(),
         });
         Self(metric)
     }
@@ -1338,7 +1364,7 @@ impl Default for OperationReplCount {
         let mut metric = MongoMetric::sum(Descriptor {
             name: "mongodb.operation.repl.count",
             description: "The number of replicated operations executed.",
-            unit: "{operations}",
+            unit: Unit::Numeric("{operation}").into(),
         });
         metric.data.is_monotonic = true;
         Self(metric)
@@ -1378,7 +1404,7 @@ impl Default for OperationTime {
         let mut metric = MongoMetric::sum(Descriptor {
             name: "mongodb.operation.time",
             description: "The total time spent performing operations.",
-            unit: "ms",
+            unit: Unit::Milliseconds.into(),
         });
         metric.data.is_monotonic = true;
         Self(metric)
@@ -1435,7 +1461,7 @@ impl Record for OperationTime {
                 return;
             }
         };
-        trace!("{:#?}", collection_path_names);
+        // trace!("{:#?}", collection_path_names);
         // trace!(?collection_path_names);
 
         let aggregated_operation_times =
@@ -1470,7 +1496,7 @@ impl Default for SessionCount {
         let mut metric = MongoMetric::sum(Descriptor {
             name: "mongodb.session.count",
             description: "The total number of active sessions.",
-            unit: "{sessions}",
+            unit: Unit::Numeric("{session}").into(),
         });
         Self(metric)
     }
@@ -1507,7 +1533,7 @@ impl Default for StorageSize {
         let mut metric = MongoMetric::sum(Descriptor {
             name: "mongodb.storage.size",
             description: "The total amount of storage allocated to this collection.",
-            unit: "By",
+            unit: Unit::Bytes.into(),
         });
         metric.data.is_monotonic = true;
         Self(metric)
@@ -1541,7 +1567,7 @@ impl Default for Uptime {
         let mut metric = MongoMetric::sum(Descriptor {
             name: "mongodb.uptime",
             description: "The amount of time that the server has been running.",
-            unit: "ms",
+            unit: Unit::Milliseconds.into(),
         });
         metric.data.is_monotonic = true;
         Self(metric)

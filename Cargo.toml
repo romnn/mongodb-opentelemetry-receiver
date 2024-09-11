@@ -12,20 +12,36 @@ lto = true
 codegen-units = 1
 
 [dependencies]
+# parse configs
 serde = "1"
-regex = "1"
+serde_yaml = "0"
+duration-string = { version = "0", features = ["serde"] }
+
+# regex = "1"
+# mongodb receiver related
 semver = "1"
+mongodb = { version = "3" }
+
+# otlp receive and export
+opentelemetry = "0"
+opentelemetry-otlp = { version = "0", features = ["grpc-tonic", "gzip-tonic", "trace", "metrics", "logs", "tls" ] }
+opentelemetry_sdk = "0"
+tonic = "0"
+
+# utils
 lazy_static = "1"
 thiserror = "1"
 strum = { version = "0", features = ["derive"] }
 
-mongodb = { version = "3" }
+# async stuff
+async-trait = "0"
+futures = "0.3"
+
+# prometheus exporter (TODO)
 prometheus = "0"
-opentelemetry = "0"
-opentelemetry-otlp = "0"
-opentelemetry_sdk = "0"
 
 # opentelemetry-stdout = { version = "0", features = ["trace"] }
+
 # telemetry for the receiver itself
 tracing = "0"
 tracing-opentelemetry = "0"
@@ -35,7 +51,3 @@ tracing-subscriber = { version = "0", features = ["json"] }
 color-eyre = "0"
 clap = { version = "4", features = ["derive"] }
 tokio = { version = "1", features = ["full"] }
-futures = "0.3"
-
-# dialoguer = "0"
-# pretty_assertions = "1"
