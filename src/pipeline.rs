@@ -10,24 +10,14 @@ use opentelemetry_sdk::{
         exporter,
     },
 };
+use petgraph::data::{Build, DataMap};
 use std::collections::HashMap;
 use std::sync::Arc;
-use tokio::sync::broadcast;
 use tokio::sync::watch;
+use tokio::{net::unix::pipe::pipe, sync::broadcast};
 
-#[derive(Debug)]
-pub struct MetricsPipeline {}
-
-#[derive(Debug)]
-pub struct PipelineManager {
-    // pub receivers: HashMap<String, Arc<dyn Receiver>>,
-    // pub processors: HashMap<String, Arc<dyn Processor>>,
-    // pub exporters: HashMap<String, Arc<dyn Exporter>>,
-    // pub pipelines: HashMap<String, Arc<dyn Exporter>>,
-    // pub receivers: HashMap<String, Receiver>,
-    // pub processors: HashMap<Receiver>,
-    // pub exporters: Vec<Receiver>,
-}
+// #[derive(Debug)]
+// pub struct MetricsPipeline {}
 
 #[derive(Debug, Clone, Hash, PartialEq, Eq, PartialOrd, Ord)]
 pub enum ServiceIdentifier<'a> {
@@ -62,6 +52,12 @@ pub enum OwnedServiceIdentifier {
     Exporter(String),
     Processor(String),
     Pipeline(String),
+}
+
+impl std::fmt::Display for OwnedServiceIdentifier {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        std::fmt::Debug::fmt(self, f)
+    }
 }
 
 #[inline]
@@ -553,14 +549,6 @@ pub enum Service {
     Exporter(Arc<dyn Exporter>),
 }
 
-pub struct Pipelines {
-    pub receivers: HashMap<String, Arc<dyn Receiver>>,
-    pub processors: HashMap<String, Arc<dyn Processor>>,
-    pub exporters: HashMap<String, Arc<dyn Exporter>>,
-    // exporters: HashMap<OwnedServiceIdentifier, Service>,
-    // services: HashMap<OwnedServiceIdentifier, Service>,
-}
-
 #[derive(Debug, Copy, Clone, Hash, PartialEq, Eq, PartialOrd, Ord, strum::Display)]
 pub enum ServiceKind {
     #[strum(serialize = "receiver")]
@@ -573,23 +561,28 @@ pub enum ServiceKind {
 
 #[derive(Debug, thiserror::Error)]
 pub enum ServiceError {
-    #[error("unknown service {0:?}")]
-    UnknownService(String),
+    #[error("missing {kind} {id:?}")]
+    MissingService { kind: ServiceKind, id: String },
+    #[error("invalid {kind} identifier {id:?}")]
+    InvalidFormat { kind: ServiceKind, id: String },
+    #[error("unknown {kind} {id:?}")]
+    UnknownService { kind: ServiceKind, id: String },
     #[error(transparent)]
-    Service(Box<dyn std::error::Error>),
+    Service(Box<dyn std::error::Error + Send + Sync + 'static>),
 }
 
 pub struct BuiltinServiceBuilder {}
 
 #[async_trait::async_trait]
 pub trait ServiceBuilder {
-    async fn build_service(
+    // async fn build_service(
+    fn build_service(
         kind: ServiceKind,
-        service: &str,
+        service: String,
         unique_id: &str,
         raw_config: serde_yaml::Value,
     ) -> Result<Service, ServiceError> {
-        match (kind, service) {
+        match (kind, service.as_str()) {
             (ServiceKind::Processor, "debug") => {
                 todo!()
             }
@@ -625,7 +618,11 @@ pub trait ServiceBuilder {
             }
             (kind, service) => {
                 tracing::warn!("unknown {kind}: {service:?}");
-                Err(ServiceError::UnknownService(unique_id.to_string()).into())
+                Err(ServiceError::UnknownService {
+                    kind,
+                    id: unique_id.to_string(),
+                }
+                .into())
             }
         }
     }
@@ -634,121 +631,347 @@ pub trait ServiceBuilder {
 #[async_trait::async_trait]
 impl ServiceBuilder for BuiltinServiceBuilder {}
 
+pub type PipelineGraph = petgraph::graph::DiGraph<OwnedServiceIdentifier, ()>;
+
+#[derive(Debug)]
+pub struct Pipelines {
+    pub services: HashMap<OwnedServiceIdentifier, Service>,
+    pub pipelines: HashMap<String, PipelineGraph>,
+    // pub receivers: HashMap<String, Arc<dyn Receiver>>,
+    // pub processors: HashMap<String, Arc<dyn Processor>>,
+    // pub exporters: HashMap<String, Arc<dyn Exporter>>,
+    // exporters: HashMap<OwnedServiceIdentifier, Service>,
+    // services: HashMap<OwnedServiceIdentifier, Service>,
+}
+
+// pub trait PipelineBuilder<B = BuiltinServiceBuilder>
+// where
+//     Self: Sized,
+//     B: ServiceBuilder,
+// {
+//     fn from_config(config: config::Config) -> eyre::Result<Self>;
+// }
+
 impl Pipelines {
-    pub fn from_config(config: config::Config) -> eyre::Result<Self> {
+    // impl<B> PipelineBuilder<B> for Pipelines
+    // where
+    //     B: ServiceBuilder,
+    // {
+    // pub fn from_config<B = BuiltinServiceBuilder>(mut config: config::Config) -> eyre::Result<Self>
+    pub fn from_config<B>(mut config: config::Config) -> eyre::Result<Self>
+    where
+        B: ServiceBuilder,
+    {
+        // fn from_config(mut config: config::Config) -> eyre::Result<Self> {
         // build pipelines
-        if let Some(service) = config.service {
-            if let Some(pipelines) = service.pipelines {
-                for (id, pipeline) in pipelines.pipelines {
-                    // pipeline.
+        let mut services = HashMap::new();
+        // let mut receivers = config
+        //     .receivers
+        //     .map(|receivers| receivers.receivers)
+        //     .unwrap_or_default();
+        // let pipelines = config
+        //     .service
+        //     .and_then(|service| service.pipelines)
+        //     .map(|pipelines| pipelines.pipelines)
+        //     .unwrap_or_default();
+
+        // build the graph first
+        let mut pipelines = HashMap::new();
+        // pub type DiGraph<N, E, Ix = DefaultIx> = Graph<N, E, Directed, Ix>;
+
+        for (pipeline_id, pipeline) in config.service.pipelines.pipelines {
+            if pipelines.contains_key(&pipeline_id) {
+                tracing::warn!("skipping duplicate pipeline {pipeline_id:?}");
+                continue;
+            }
+
+            let mut graph = PipelineGraph::default();
+            let receiver_nodes = pipeline
+                .receivers
+                .iter()
+                .map(|receiver_id| {
+                    graph.add_node(OwnedServiceIdentifier::Receiver(receiver_id.to_string()))
+                })
+                .collect::<Vec<_>>();
+
+            if receiver_nodes.is_empty() {
+                tracing::warn!("skipping pipeline {pipeline_id:?} without receivers");
+                continue;
+            };
+
+            let processor_nodes = pipeline
+                .processors
+                .iter()
+                .map(|processor_id| {
+                    graph.add_node(OwnedServiceIdentifier::Processor(processor_id.to_string()))
+                })
+                .collect::<Vec<_>>();
+
+            // let processors = pipeline.processors.iter();
+            // if let Some(first_processor) =
+
+            // let Some(last_node) = receiver_nodes.last() else {
+            // let mut last_node = receiver_nodes.last()
+
+            let exporter_nodes = pipeline
+                .exporters
+                .iter()
+                .map(|exporter_id| {
+                    graph.add_node(OwnedServiceIdentifier::Exporter(exporter_id.to_string()))
+                })
+                .collect::<Vec<_>>();
+
+            if exporter_nodes.is_empty() {
+                tracing::warn!("skipping pipeline {pipeline_id:?} without exporters");
+                continue;
+            }
+
+            // connect receiver nodes to the first processor
+            if let Some(first_processor_node) = processor_nodes.first() {
+                for receiver_node in receiver_nodes.iter() {
+                    graph.add_edge(*receiver_node, *first_processor_node, ());
                 }
             }
+
+            // chain the processors
+            for (last_processor_node, processor_node) in
+                processor_nodes.iter().zip(processor_nodes.iter().skip(1))
+            {
+                graph.add_edge(*last_processor_node, *processor_node, ());
+            }
+
+            // connect the last processor to all exporters
+            if let Some(last_processor_node) = processor_nodes.last() {
+                for exporter_node in exporter_nodes.iter() {
+                    graph.add_edge(*last_processor_node, *exporter_node, ());
+                }
+            }
+
+            if processor_nodes.is_empty() {
+                // connect each receiver to each exporter
+                for receiver_node in receiver_nodes.iter() {
+                    for exporter_node in exporter_nodes.iter() {
+                        graph.add_edge(*receiver_node, *exporter_node, ());
+                    }
+                }
+            }
+
+            // let mut processor_node_iter = processor_nodes.iter();
+            // let mut last_processor_node = processor_node_iter.next();
+            //
+            // while let Some(processor_node) = processor_node_iter.next() {
+            //     graph.add_edge(last_processor_node, b, weight)
+            //     last_processor_node = Some(processor_node);
+            // }
+            // if let Some(first_processor) = processor_iter.next() {
+            //     for receiver_node in receiver_nodes {
+            //         graph.add_edge(a, b, weight)
+            //     }
+            // }
+
+            // for receiver_id in &pipeline.receivers {
+            //     graph.add_node(OwnedServiceIdentifier::Receiver(receiver_id.to_string()));
+            // }
+            // for processor_id in &pipeline.processors {
+            //     let graph.add_node(OwnedServiceIdentifier::Processor(processor_id.to_string()));
+            //     graph.
+            // }
+            // for exporter_id in &pipeline.exporters {
+            //     graph.add_node(OwnedServiceIdentifier::Exporter(exporter_id.to_string()));
+            // }
+
+            // we want to build mutliple pipeline graphs, but for now just construct
+            for receiver_id in pipeline.receivers {
+                let kind = ServiceKind::Receiver;
+                let service =
+                    service_id(&receiver_id).ok_or_else(|| ServiceError::InvalidFormat {
+                        kind,
+                        id: receiver_id.clone(),
+                    })?;
+                let raw_config =
+                    config
+                        .receivers
+                        .receivers
+                        .remove(&receiver_id)
+                        .ok_or_else(|| ServiceError::MissingService {
+                            kind,
+                            id: receiver_id.clone(),
+                        })?;
+                match B::build_service(ServiceKind::Receiver, service, &receiver_id, raw_config) {
+                    Ok(service) => {
+                        services.insert(OwnedServiceIdentifier::Receiver(receiver_id), service);
+                    }
+                    Err(err) => {
+                        tracing::error!("failed to build {receiver_id}");
+                    }
+                }
+            }
+
+            // TODO: find all paths to leafs using dfs here, but for now its fine
+            let start_end: Vec<(petgraph::graph::NodeIndex, petgraph::graph::NodeIndex)> =
+                receiver_nodes
+                    .iter()
+                    .flat_map(|receiver_node| {
+                        exporter_nodes
+                            .iter()
+                            .map(|exporter_node| (*receiver_node, *exporter_node))
+                    })
+                    .collect();
+
+            let ways: Vec<Vec<&OwnedServiceIdentifier>> = start_end
+                .iter()
+                .flat_map(|(receiver_node, exporter_node)| {
+                    petgraph::algo::all_simple_paths::<Vec<_>, _>(
+                        &graph,
+                        *receiver_node,
+                        *exporter_node,
+                        0,
+                        None,
+                    )
+                })
+                .map(|path| {
+                    path.into_iter()
+                        .map(|idx| graph.node_weight(idx).unwrap())
+                        .collect()
+                })
+                .collect();
+
+            let unique_ways =
+                std::collections::HashSet::<Vec<&OwnedServiceIdentifier>>::from_iter(ways);
+
+            for path in unique_ways {
+                tracing::trace!(
+                    "{}",
+                    path.iter()
+                        .map(|id| id.to_string())
+                        .collect::<Vec<_>>()
+                        .join(" -> ")
+                );
+            }
+
+            pipelines.insert(pipeline_id, graph);
         }
 
+        // dbg!(&pipelines);
+
         Ok(Self {
-            receivers: all_receivers
-                .into_iter()
-                .map(|v| (v.id().to_string(), v))
-                .collect(),
-            processors: all_processors
-                .into_iter()
-                .map(|v| (v.id().to_string(), v))
-                .collect(),
-            exporters: all_exporters
-                .into_iter()
-                .map(|v| (v.id().to_string(), v))
-                .collect(),
+            services,
+            pipelines,
+            // receivers: all_receivers
+            //     .into_iter()
+            //     .map(|v| (v.id().to_string(), v))
+            //     .collect(),
+            // processors: all_processors
+            //     .into_iter()
+            //     .map(|v| (v.id().to_string(), v))
+            //     .collect(),
+            // exporters: all_exporters
+            //     .into_iter()
+            //     .map(|v| (v.id().to_string(), v))
+            //     .collect(),
         })
     }
 }
 
-impl PipelineManager {
-    pub fn new(config: config::Config) -> eyre::Result<Self> {
-        // // build receivers
-        // let mut all_receivers: Vec<Arc<dyn Receiver>> = Vec::new();
-        // if let Some(receivers) = config.receivers {
-        //     for (unique_id, receiver_config) in receivers.receivers {
-        //         match service_id(&unique_id).as_deref() {
-        //             Some("mongodb") => {
-        //                 let mongodb_receiver =
-        //                     MongoDbReceiver::from_config(unique_id, receiver_config)?;
-        //                 dbg!(&mongodb_receiver);
-        //                 all_receivers.push(Arc::new(mongodb_receiver));
-        //             }
-        //             Some("otlp") => {
-        //                 let otlp_receiver = OtlpReceiver::from_config(unique_id, receiver_config)?;
-        //                 dbg!(&otlp_receiver);
-        //                 all_receivers.push(Arc::new(otlp_receiver));
-        //             }
-        //             other => {
-        //                 tracing::warn!("unknown receiver: {other:?}");
-        //             }
-        //         };
-        //     }
-        // }
-        //
-        // // build processors
-        // let mut all_processors: Vec<Arc<dyn Processor>> = Vec::new();
-        // if let Some(processors) = config.processors {
-        //     for (unique_id, processor_config) in processors.processors {
-        //         match service_id(&unique_id).as_deref() {
-        //             Some("batch") => {
-        //                 let batch_processor =
-        //                     BatchProcessor::from_config(unique_id, processor_config)?;
-        //                 dbg!(&batch_processor);
-        //                 all_processors.push(Arc::new(batch_processor));
-        //             }
-        //             other => {
-        //                 tracing::warn!("unknown processor: {other:?}");
-        //             }
-        //         };
-        //     }
-        // }
-        //
-        // // build exporters
-        // let mut all_exporters: Vec<Arc<dyn Exporter>> = Vec::new();
-        // if let Some(exporters) = config.exporters {
-        //     for (unique_id, exporter_config) in exporters.exporters {
-        //         match service_id(&unique_id).as_deref() {
-        //             Some("debug") => {
-        //                 // TODO
-        //             }
-        //             Some("otlp") => {
-        //                 let otlp_exporter = OtlpExporter::from_config(unique_id, exporter_config)?;
-        //                 dbg!(&otlp_exporter);
-        //                 all_exporters.push(Arc::new(otlp_exporter));
-        //             }
-        //             other => {
-        //                 tracing::warn!("unknown exporter: {other:?}");
-        //             }
-        //         };
-        //     }
-        // }
+#[derive(Debug)]
+pub struct PipelineExecutor {
+    pub pipelines: Pipelines,
+    // pub receivers: HashMap<String, Arc<dyn Receiver>>,
+    // pub processors: HashMap<String, Arc<dyn Processor>>,
+    // pub exporters: HashMap<String, Arc<dyn Exporter>>,
+    // pub pipelines: HashMap<String, Arc<dyn Exporter>>,
+    // pub receivers: HashMap<String, Receiver>,
+    // pub processors: HashMap<Receiver>,
+    // pub exporters: Vec<Receiver>,
+}
 
-        // build pipelines
-        if let Some(service) = config.service {
-            if let Some(pipelines) = service.pipelines {
-                for (id, pipeline) in pipelines.pipelines {
-                    // pipeline.
-                }
-            }
-        }
+impl PipelineExecutor {
+    // pub fn new(config: config::Config) -> eyre::Result<Self> {
+    // // build receivers
+    // let mut all_receivers: Vec<Arc<dyn Receiver>> = Vec::new();
+    // if let Some(receivers) = config.receivers {
+    //     for (unique_id, receiver_config) in receivers.receivers {
+    //         match service_id(&unique_id).as_deref() {
+    //             Some("mongodb") => {
+    //                 let mongodb_receiver =
+    //                     MongoDbReceiver::from_config(unique_id, receiver_config)?;
+    //                 dbg!(&mongodb_receiver);
+    //                 all_receivers.push(Arc::new(mongodb_receiver));
+    //             }
+    //             Some("otlp") => {
+    //                 let otlp_receiver = OtlpReceiver::from_config(unique_id, receiver_config)?;
+    //                 dbg!(&otlp_receiver);
+    //                 all_receivers.push(Arc::new(otlp_receiver));
+    //             }
+    //             other => {
+    //                 tracing::warn!("unknown receiver: {other:?}");
+    //             }
+    //         };
+    //     }
+    // }
+    //
+    // // build processors
+    // let mut all_processors: Vec<Arc<dyn Processor>> = Vec::new();
+    // if let Some(processors) = config.processors {
+    //     for (unique_id, processor_config) in processors.processors {
+    //         match service_id(&unique_id).as_deref() {
+    //             Some("batch") => {
+    //                 let batch_processor =
+    //                     BatchProcessor::from_config(unique_id, processor_config)?;
+    //                 dbg!(&batch_processor);
+    //                 all_processors.push(Arc::new(batch_processor));
+    //             }
+    //             other => {
+    //                 tracing::warn!("unknown processor: {other:?}");
+    //             }
+    //         };
+    //     }
+    // }
+    //
+    // // build exporters
+    // let mut all_exporters: Vec<Arc<dyn Exporter>> = Vec::new();
+    // if let Some(exporters) = config.exporters {
+    //     for (unique_id, exporter_config) in exporters.exporters {
+    //         match service_id(&unique_id).as_deref() {
+    //             Some("debug") => {
+    //                 // TODO
+    //             }
+    //             Some("otlp") => {
+    //                 let otlp_exporter = OtlpExporter::from_config(unique_id, exporter_config)?;
+    //                 dbg!(&otlp_exporter);
+    //                 all_exporters.push(Arc::new(otlp_exporter));
+    //             }
+    //             other => {
+    //                 tracing::warn!("unknown exporter: {other:?}");
+    //             }
+    //         };
+    //     }
+    // }
 
-        Ok(Self {
-            receivers: all_receivers
-                .into_iter()
-                .map(|v| (v.id().to_string(), v))
-                .collect(),
-            processors: all_processors
-                .into_iter()
-                .map(|v| (v.id().to_string(), v))
-                .collect(),
-            exporters: all_exporters
-                .into_iter()
-                .map(|v| (v.id().to_string(), v))
-                .collect(),
-        })
-    }
+    // // build pipelines
+    // if let Some(service) = config.service {
+    //     if let Some(pipelines) = service.pipelines {
+    //         for (id, pipeline) in pipelines.pipelines {
+    //             // pipeline.
+    //         }
+    //     }
+    // }
+    //
+    // Ok(Self {
+    //     receivers: all_receivers
+    //         .into_iter()
+    //         .map(|v| (v.id().to_string(), v))
+    //         .collect(),
+    //     processors: all_processors
+    //         .into_iter()
+    //         .map(|v| (v.id().to_string(), v))
+    //         .collect(),
+    //     exporters: all_exporters
+    //         .into_iter()
+    //         .map(|v| (v.id().to_string(), v))
+    //         .collect(),
+    // })
+    // }
 
     pub async fn start(&self, mut shutdown_rx: watch::Receiver<bool>) -> eyre::Result<()> {
         use futures::stream::FuturesUnordered;
@@ -759,41 +982,41 @@ impl PipelineManager {
             JoinHandle<(OwnedServiceIdentifier, eyre::Result<()>)>,
         > = FuturesUnordered::new();
 
-        for exporter in self.exporters.values() {
-            let shutdown_rx_clone = shutdown_rx.clone();
-            let exporter_clone = exporter.clone();
-            task_handles.push(tokio::spawn(async move {
-                let task_id = OwnedServiceIdentifier::Exporter(exporter_clone.id().to_string());
-                tracing::debug!("starting {task_id:?}");
-                let res = exporter_clone.start(shutdown_rx_clone).await;
-                (task_id, res)
-            }));
-        }
-
-        for processor in self.processors.values() {
-            let shutdown_rx_clone = shutdown_rx.clone();
-            let processor_clone = processor.clone();
-            task_handles.push(tokio::spawn(async move {
-                let task_id = OwnedServiceIdentifier::Processor(processor_clone.id().to_string());
-                tracing::debug!("starting {task_id:?}");
-                let res = processor_clone.start(shutdown_rx_clone).await;
-                (task_id, res)
-            }));
-        }
-
-        for receiver in self.receivers.values() {
-            let shutdown_rx_clone = shutdown_rx.clone();
-            let receiver_clone = receiver.clone();
-            task_handles.push(tokio::spawn(async move {
-                let task_id = OwnedServiceIdentifier::Receiver(receiver_clone.id().to_string());
-                tracing::debug!("starting {task_id:?}");
-                let res = receiver_clone.start(shutdown_rx_clone).await;
-                (task_id, res)
-            }));
-        }
-
-        // setup the pipelines
-        for receiver in self.services.values() {}
+        // for exporter in self.exporters.values() {
+        //     let shutdown_rx_clone = shutdown_rx.clone();
+        //     let exporter_clone = exporter.clone();
+        //     task_handles.push(tokio::spawn(async move {
+        //         let task_id = OwnedServiceIdentifier::Exporter(exporter_clone.id().to_string());
+        //         tracing::debug!("starting {task_id:?}");
+        //         let res = exporter_clone.start(shutdown_rx_clone).await;
+        //         (task_id, res)
+        //     }));
+        // }
+        //
+        // for processor in self.processors.values() {
+        //     let shutdown_rx_clone = shutdown_rx.clone();
+        //     let processor_clone = processor.clone();
+        //     task_handles.push(tokio::spawn(async move {
+        //         let task_id = OwnedServiceIdentifier::Processor(processor_clone.id().to_string());
+        //         tracing::debug!("starting {task_id:?}");
+        //         let res = processor_clone.start(shutdown_rx_clone).await;
+        //         (task_id, res)
+        //     }));
+        // }
+        //
+        // for receiver in self.receivers.values() {
+        //     let shutdown_rx_clone = shutdown_rx.clone();
+        //     let receiver_clone = receiver.clone();
+        //     task_handles.push(tokio::spawn(async move {
+        //         let task_id = OwnedServiceIdentifier::Receiver(receiver_clone.id().to_string());
+        //         tracing::debug!("starting {task_id:?}");
+        //         let res = receiver_clone.start(shutdown_rx_clone).await;
+        //         (task_id, res)
+        //     }));
+        // }
+        //
+        // // setup the pipelines
+        // for receiver in self.services.values() {}
 
         // wait for all tasks to complete
         while let Some(Ok((task_id, res))) = task_handles.next().await {

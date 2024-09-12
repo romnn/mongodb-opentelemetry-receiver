@@ -29,7 +29,7 @@ pub struct MongoDbReceiverConfig {
     tls: Option<TlsConfig>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[derive(Debug, Default, Clone, PartialEq, Eq, Deserialize)]
 pub struct Receivers {
     #[serde(flatten)]
     pub receivers: HashMap<String, serde_yaml::Value>,
@@ -45,7 +45,7 @@ pub struct BatchProcessorConfig {
     pub timeout: Option<DurationString>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[derive(Debug, Default, Clone, PartialEq, Eq, Deserialize)]
 pub struct Processors {
     #[serde(flatten)]
     pub processors: HashMap<String, serde_yaml::Value>,
@@ -72,7 +72,7 @@ pub struct OtlpExporterConfig {
     pub tls: Option<TlsConfig>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[derive(Debug, Default, Clone, PartialEq, Eq, Deserialize)]
 pub struct Exporters {
     #[serde(flatten)]
     pub exporters: HashMap<String, serde_yaml::Value>,
@@ -92,7 +92,7 @@ pub struct PipelineConfig {
     pub exporters: Vec<String>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[derive(Debug, Default, Clone, PartialEq, Eq, Deserialize)]
 pub struct Pipelines {
     #[serde(flatten)]
     pub pipelines: HashMap<String, PipelineConfig>,
@@ -101,17 +101,25 @@ pub struct Pipelines {
     // pub traces: Option<PipelineConfig>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[derive(Debug, Default, Clone, PartialEq, Eq, Deserialize)]
 pub struct Services {
-    pub pipelines: Option<Pipelines>,
+    pub pipelines: Pipelines,
 }
 
 #[derive(Debug, Default, Clone, PartialEq, Eq, Deserialize)]
 pub struct Config {
-    pub receivers: Option<Receivers>,
-    pub processors: Option<Processors>,
-    pub exporters: Option<Exporters>,
-    pub service: Option<Services>,
+    #[serde(default)]
+    pub receivers: Receivers,
+    #[serde(default)]
+    pub processors: Processors,
+    #[serde(default)]
+    pub exporters: Exporters,
+    #[serde(default)]
+    pub service: Services,
+    // pub receivers: Option<Receivers>,
+    // pub processors: Option<Processors>,
+    // pub exporters: Option<Exporters>,
+    // pub service: Option<Services>,
 }
 
 impl Config {

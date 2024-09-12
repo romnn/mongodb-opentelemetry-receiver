@@ -88,12 +88,18 @@ async fn main() -> eyre::Result<()> {
     // dbg!(&config);
     // info!(?config);
 
-    let pipeline_manager = collector::pipeline::PipelineManager::new(config)?;
-    pipeline_manager.start(shutdown_rx).await?;
+    // use collector::pipeline::PipelineBuilder;
+    use collector::pipeline::{BuiltinServiceBuilder, Pipelines};
+    let pipelines = Pipelines::from_config::<BuiltinServiceBuilder>(config)?;
+    // tracing::debug!(?pipelines);
+    // dbg!(&pipelines);
+    // let pipeline_manager = collector::pipeline::PipelineManager::new(pipelines)?;
+    let pipeline_executor = collector::pipeline::PipelineExecutor { pipelines };
+    pipeline_executor.start(shutdown_rx).await?;
 
     return Ok(());
 
-    let options = mongodb_opentelemetry_receiver::mongodb::Options {
+    let options = collector::mongodb::Options {
         connection_uri: options.connection_uri,
     };
 

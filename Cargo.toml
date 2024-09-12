@@ -17,6 +17,9 @@ serde = "1"
 serde_yaml = "0"
 duration-string = { version = "0", features = ["serde"] }
 
+# pipeline setup
+petgraph = "0"
+
 # regex = "1"
 # mongodb receiver related
 semver = "1"
