@@ -21,6 +21,10 @@ processors:
 exporters:
   debug:
     verbosity: detailed
+  otlp/2:
+    endpoint: localhost
+    tls:
+      insecure: true
   otlp:
     endpoint: localhost
     tls:
@@ -42,5 +46,5 @@ service:
       processors: [batch]
       # exporters: [debug]
       # exporters: [prometheus]
-      exporters: [otlp]
+      exporters: [otlp, otlp/2]
       # exporters: [otlp, prometheus]

@@ -41,15 +41,18 @@ fn setup_telemetry() {
     let subscriber = tracing_subscriber::registry()
         .with(telemetry)
         // .with(
-        //     tracing_subscriber::filter::::from_default_env()
-        //         .add_directive(tracing::Level::DEBUG.into()),
+        // tracing_subscriber::filter::de()
+        //     .add_directive(tracing::Level::DEBUG.into()),
         // )
         .with(
             tracing_subscriber::fmt::Layer::new()
                 .pretty()
                 .compact()
+                // .with_level(tracing::Level::DEBUG)
+                // .with_max_level(tracing_subscriber::Level::DEBUG)
                 .with_writer(std::io::stdout),
-        );
+        )
+        .with(tracing_subscriber::filter::EnvFilter::from_default_env());
     // .init()
     // .unwrap();
     tracing::subscriber::set_global_default(subscriber).unwrap();

@@ -1,6 +1,7 @@
 #![allow(warnings)]
 
 pub mod attributes;
+pub mod bfs;
 pub mod config;
 pub mod consumer;
 pub mod doc;
