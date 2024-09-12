@@ -96,17 +96,33 @@ impl Receiver for MongoDbReceiver {
     fn id(&self) -> &str {
         &self.id
     }
-    async fn start(&self, shutdown_rx: watch::Receiver<bool>) -> eyre::Result<()> {
+    // async fn start(&self, shutdown_rx: watch::Receiver<bool>) -> eyre::Result<()> {
+    async fn start(self: Box<Self>, mut shutdown_rx: watch::Receiver<bool>) -> eyre::Result<()> {
         // async fn start(self: Arc<Self>, shutdown_rx: watch::Receiver<bool>) -> eyre::Result<()> {
+        // send data each second
+        let mut interval = tokio::time::interval(std::time::Duration::from_secs(1));
+        interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+        let mut interval_stream = tokio_stream::wrappers::IntervalStream::new(interval);
+        loop {
+            tokio::select! {
+                tick = interval_stream.next() => match tick {
+                    Some(instant) => {
+                        tracing::debug!(queue_size = self.metrics_tx.len(), num_receivers = self.metrics_tx.receiver_count(), "sending tick {instant:?}");
+                        self.metrics_tx.send(format!("mock metric: {instant:?}"));
+                    }
+                    None => break,
+                },
+                _ = shutdown_rx.changed() => break,
+            }
+        }
         Ok(())
     }
+}
 
-    fn metrics(&self) -> MetricsStream {
-        // let stream = BroadcastStream::new(self.metrics_tx.subscribe());
+#[async_trait::async_trait]
+impl Producer for MongoDbReceiver {
+    fn metrics(&self) -> BroadcastStream<MetricPayload> {
         BroadcastStream::new(self.metrics_tx.subscribe())
-        // tokio::pin! {
-        // Box::new()
-        // }
     }
 }
 
@@ -512,10 +528,20 @@ impl Exporter for OtlpExporter {
     }
 
     async fn start(
-        &self,
+        // &self,
+        self: Box<Self>,
         shutdown_rx: watch::Receiver<bool>,
         mut metrics: MetricsStream,
     ) -> eyre::Result<()> {
+        tracing::debug!("{} is running", self.id);
+        // let metric_handle = tokio::spawn(|| async move {});
+        // loop {
+        //     let metric = tokio::select! {
+        //         metric = metrics.next() => metric,
+        //         _ = shutdown_rx.changed() => return;
+        //     };
+        // };
+        // metric_handle.await
         while let Some(metric) = metrics.next().await {
             tracing::debug!("{} received metric {:?}", self.id, metric);
         }
@@ -528,12 +554,18 @@ impl Exporter for OtlpExporter {
 pub struct BatchProcessor {
     pub id: String,
     pub config: config::BatchProcessorConfig,
+    pub metrics_tx: broadcast::Sender<MetricPayload>,
 }
 
 impl BatchProcessor {
     pub fn from_config(id: String, config: serde_yaml::Value) -> eyre::Result<Self> {
         let config: config::BatchProcessorConfig = serde_yaml::from_value(config)?;
-        Ok(Self { id, config })
+        let (metrics_tx, _) = broadcast::channel(BUFFER_SIZE);
+        Ok(Self {
+            id,
+            config,
+            metrics_tx,
+        })
     }
 }
 
@@ -543,25 +575,69 @@ impl Processor for BatchProcessor {
         &self.id
     }
 
-    async fn start(&self, shutdown_rx: watch::Receiver<bool>) -> eyre::Result<()> {
-        // async fn start(self: Arc<Self>, shutdown_rx: watch::Receiver<bool>) -> eyre::Result<()> {
+    async fn start(
+        self: Box<Self>,
+        shutdown_rx: watch::Receiver<bool>,
+        mut metrics: MetricsStream,
+    ) -> eyre::Result<()> {
+        while let Some((from, metric)) = metrics.next().await {
+            tracing::debug!("{} received metric {:?} from {:?}", self.id, metric, from);
+            let metric = match metric {
+                Ok(metric) => metric,
+                Err(err) => {
+                    continue;
+                }
+            };
+            if let Err(err) = self.metrics_tx.send(metric) {
+                tracing::error!("{} failed to send: {err}", self.service_id());
+            }
+        }
         Ok(())
     }
 }
 
 #[async_trait::async_trait]
-pub trait Receiver: std::fmt::Debug + Send + Sync + 'static {
+impl Producer for BatchProcessor {
+    fn metrics(&self) -> BroadcastStream<MetricPayload> {
+        BroadcastStream::new(self.metrics_tx.subscribe())
+    }
+}
+
+#[async_trait::async_trait]
+pub trait Receiver: Producer + std::fmt::Debug + Send + Sync + 'static {
     fn id(&self) -> &str;
-    async fn start(&self, shutdown_rx: watch::Receiver<bool>) -> eyre::Result<()>;
-    fn metrics(&self) -> MetricsStream;
+
+    fn service_id(&self) -> ServiceIdentifier {
+        ServiceIdentifier::Receiver(self.id().to_string())
+    }
+
+    async fn start(self: Box<Self>, shutdown_rx: watch::Receiver<bool>) -> eyre::Result<()>;
+}
+
+#[async_trait::async_trait]
+pub trait Producer: Send + Sync + 'static {
+    fn metrics(&self) -> BroadcastStream<MetricPayload>;
+    //     BroadcastStream::new(futures::stream::empty())
+    // }
+
     // fn logs(&self) -> Option<broadcast::Receiver<LogRecord>>;
     // async fn start(self: Arc<Self>, shutdown_rx: watch::Receiver<bool>) -> eyre::Result<()>;
 }
 
 #[async_trait::async_trait]
-pub trait Processor: std::fmt::Debug + Send + Sync + 'static {
+pub trait Processor: Producer + std::fmt::Debug + Send + Sync + 'static {
     fn id(&self) -> &str;
-    async fn start(&self, shutdown_rx: watch::Receiver<bool>) -> eyre::Result<()>;
+
+    fn service_id(&self) -> ServiceIdentifier {
+        ServiceIdentifier::Processor(self.id().to_string())
+    }
+
+    async fn start(
+        // &self,
+        self: Box<Self>,
+        shutdown_rx: watch::Receiver<bool>,
+        metrics: MetricsStream,
+    ) -> eyre::Result<()>;
     // async fn start(self: Arc<Self>, shutdown_rx: watch::Receiver<bool>) -> eyre::Result<()>;
 }
 
@@ -570,29 +646,68 @@ pub type TracesPayload = String;
 pub type LogPayload = String;
 
 // pub type MetricsStream = Box<dyn Stream<Item = MetricPayload> + Send + Sync + Unpin>;
-pub type MetricsStream = BroadcastStream<MetricPayload>;
+// pub type MetricsStream = BroadcastStream<MetricPayload>;
+pub type MetricsStream = tokio_stream::StreamMap<ServiceIdentifier, BroadcastStream<MetricPayload>>;
 // pub type MetricsStream = BroadcastStream<dyn Stream<Item = MetricPayload> + Send + Sync + Unpin>;
 // BroadcastStream
 
-pub type TracesStream = Box<dyn Stream<Item = TracesPayload> + Send + Sync>;
-pub type LogStream = Box<dyn Stream<Item = LogPayload> + Send + Sync>;
+// pub type TracesStream = Box<dyn Stream<Item = TracesPayload> + Send + Sync>;
+// pub type LogStream = Box<dyn Stream<Item = LogPayload> + Send + Sync>;
 
 #[async_trait::async_trait]
 pub trait Exporter: std::fmt::Debug + Send + Sync + 'static {
     fn id(&self) -> &str;
+
+    fn service_id(&self) -> ServiceIdentifier {
+        ServiceIdentifier::Exporter(self.id().to_string())
+    }
+
     async fn start(
-        &self,
+        self: Box<Self>,
+        // &self,
         shutdown_rx: watch::Receiver<bool>,
         metrics: MetricsStream,
     ) -> eyre::Result<()>;
     // async fn start(self: Arc<Self>, shutdown_rx: watch::Receiver<bool>) -> eyre::Result<()>;
 }
 
-#[derive(Debug, Clone, strum::Display)]
+// #[derive(Debug, Clone, strum::Display)]
+#[derive(Debug, strum::Display)]
 pub enum Service {
-    Receiver(Arc<dyn Receiver>),
-    Processor(Arc<dyn Processor>),
-    Exporter(Arc<dyn Exporter>),
+    Receiver(Box<dyn Receiver>),
+    Processor(Box<dyn Processor>),
+    Exporter(Box<dyn Exporter>),
+    // Receiver(Arc<dyn Receiver>),
+    // Processor(Arc<dyn Processor>),
+    // Exporter(Arc<dyn Exporter>),
+}
+
+impl Service {
+    pub fn metrics(&self) -> Option<BroadcastStream<MetricPayload>> {
+        match self {
+            Self::Receiver(receiver) => Some(receiver.metrics()),
+            Self::Processor(processor) => Some(processor.metrics()),
+            // exporters do not produce metrics
+            Self::Exporter(_) => None,
+        }
+    }
+
+    pub fn service_id(&self) -> ServiceIdentifier {
+        match self {
+            Self::Receiver(receiver) => receiver.service_id(),
+            Self::Processor(processor) => processor.service_id(),
+            Self::Exporter(exporter) => exporter.service_id(),
+        }
+    }
+
+    //     pub fn as_producer(&self) -> Option<&dyn Producer> {
+    //         match self {
+    //             Self::Receiver(receiver) => Some(receiver.as_ref() as &dyn Producer),
+    //             Self::Processor(processor) => Some(&processor),
+    //             // exporters do not produce metrics
+    //             Self::Exporter(_) => None,
+    //         }
+    //     }
 }
 
 #[derive(Debug, Copy, Clone, Hash, PartialEq, Eq, PartialOrd, Ord, strum::Display)]
@@ -635,7 +750,8 @@ pub trait ServiceBuilder {
                 let otlp_exporter = OtlpExporter::from_config(unique_id.to_string(), raw_config)
                     .map_err(|err| ServiceError::Service(err.into()))?;
                 // dbg!(&otlp_exporter);
-                Ok(Service::Exporter(Arc::new(otlp_exporter)))
+                Ok(Service::Exporter(Box::new(otlp_exporter)))
+                // Ok(Service::Exporter(Arc::new(otlp_exporter)))
                 // all_exporters.push(Arc::new(otlp_exporter));
             }
             (ServiceKind::Processor, "batch") => {
@@ -643,7 +759,8 @@ pub trait ServiceBuilder {
                     BatchProcessor::from_config(unique_id.to_string(), raw_config)
                         .map_err(|err| ServiceError::Service(err.into()))?;
                 // dbg!(&batch_processor);
-                Ok(Service::Processor(Arc::new(batch_processor)))
+                Ok(Service::Processor(Box::new(batch_processor)))
+                // Ok(Service::Processor(Arc::new(batch_processor)))
                 // all_processors.push(Arc::new(batch_processor));
             }
             (ServiceKind::Receiver, "mongodb") => {
@@ -651,7 +768,8 @@ pub trait ServiceBuilder {
                     MongoDbReceiver::from_config(unique_id.to_string(), raw_config)
                         .map_err(|err| ServiceError::Service(err.into()))?;
                 // dbg!(&mongodb_receiver);
-                Ok(Service::Receiver(Arc::new(mongodb_receiver)))
+                Ok(Service::Receiver(Box::new(mongodb_receiver)))
+                // Ok(Service::Receiver(Arc::new(mongodb_receiver)))
                 // all_receivers.push(Arc::new(mongodb_receiver));
             }
             // (ServiceKind::Receiver, "otlp") => {
@@ -984,7 +1102,7 @@ pub fn chain_dependencies<Ty, Ix>(
     services: &HashMap<ServiceIdentifier, Service>,
     dependencies: petgraph::graph::Edges<'_, PipelineEdge, Ty, Ix>,
     // dependencies: petgraph::graph::Edges<'_, PipelineEdge, petgraph::Directed, Ty, Ix>,
-) -> ()
+) -> (MetricsStream,)
 where
     // petgraph::Graph<N, E, PipelineEdge, PipelineNode>: petgraph::data::DataMap,
     Ty: petgraph::EdgeType, // + petgraph::adj::IndexType,
@@ -992,7 +1110,8 @@ where
 {
     use petgraph::visit::{EdgeRef, NodeRef};
     // find all the metrics
-    let mut metrics: Vec<String> = vec![];
+    // let mut metrics: Vec<MetricsStream> = vec![];
+    let mut merged_metrics = MetricsStream::new();
     for dep in dependencies {
         // let dep_id: &PipelineNode = dep.target().index()).unwrap();
         // let dep_id: &PipelineNode = graph.node_weight(dep.target()).unwrap();
@@ -1004,18 +1123,31 @@ where
         // let dep_id = graph.node_weight(&dep.target().wei).unwrap();
         match dep.weight() {
             PipelineEdge::Metrics => {
-                match dep_service {
-                    Service::Receiver(receiver) => {
-                        let test = receiver.metrics();
-                    }
-                    _ => {}
-                };
+                if let Some(metrics) = dep_service.metrics() {
+                    merged_metrics.insert(dep_service.service_id(), metrics);
+                }
+                // match dep_service {
+                //     Service::Receiver(receiver) => {
+                //         // let test = receiver.metrics();
+                //         // metrics.push(receiver.metrics());
+                //         metrics.insert(receiver.service_id(), receiver.metrics());
+                //     }
+                //     _ => {}
+                // };
                 // metrics.push(dep_service.);
             }
             PipelineEdge::Traces => {}
             PipelineEdge::Logs => {}
         }
     }
+    (merged_metrics,)
+    // let mut map = tokio_stream::StreamMap::from_iter(metrics);
+
+    // Insert both streams
+    // map.insert("one", rx1);
+    // map.insert("two", rx2);
+    // let metrics
+    // (metrics.chain())
 }
 
 #[derive(Debug)]
@@ -1024,7 +1156,8 @@ pub struct PipelineExecutor {
 }
 
 impl PipelineExecutor {
-    pub async fn start(&self, mut shutdown_rx: watch::Receiver<bool>) -> eyre::Result<()> {
+    // pub async fn start(&self, mut shutdown_rx: watch::Receiver<bool>) -> eyre::Result<()> {
+    pub async fn start(mut self, mut shutdown_rx: watch::Receiver<bool>) -> eyre::Result<()> {
         use futures::stream::FuturesUnordered;
         use futures::stream::StreamExt;
         use tokio::task::JoinHandle;
@@ -1036,7 +1169,11 @@ impl PipelineExecutor {
         // for (pipeline_id, pipeline_graph) in self.pipelines.pipelines.iter() {
         // let mut pipeline_graph = pipeline_graph.clone();
         let mut pipeline_graph = self.pipelines.pipelines.clone();
+
+        // start with the sinks, then go up to the sources
+        // this way, nodes up the pipeline do not exit prematurely due to having zero subscribers
         pipeline_graph.reverse();
+
         // let reversed_pipeline = pipeline.reverse();
         // let reversed_pipeline = petgraph::visit::Reversed(pipeline);
         // match service_id(pipeline_id).as_deref() {
@@ -1049,6 +1186,7 @@ impl PipelineExecutor {
         //     .collect::<Vec<_>>());
 
         // for source in sources {
+        // let mut sources = pipeline_graph.externals(petgraph::Direction::Incoming);
         let mut sources = pipeline_graph.externals(petgraph::Direction::Incoming);
         let source = sources.next().unwrap();
         assert_eq!(sources.next(), None);
@@ -1059,7 +1197,9 @@ impl PipelineExecutor {
             let PipelineNode::Service(service_id) = node else {
                 continue;
             };
-            let service = self.pipelines.services.get(service_id).unwrap().clone();
+            let service = self.pipelines.services.remove(service_id).unwrap();
+            // let service = self.pipelines.services.get(service_id).unwrap();
+            // let service = self.pipelines.services.get(service_id).unwrap().clone();
             // if let PipelineNode::Source | PipelineNode::Sink = node {
             //     continue;
             // }
@@ -1085,7 +1225,8 @@ impl PipelineExecutor {
             let shutdown_rx_clone = shutdown_rx.clone();
             let service_id_clone = service_id.clone();
 
-            let test = chain_dependencies(&pipeline_graph, &self.pipelines.services, dependencies);
+            let (metrics,) =
+                chain_dependencies(&pipeline_graph, &self.pipelines.services, dependencies);
 
             // start the service
             match service {
@@ -1097,15 +1238,15 @@ impl PipelineExecutor {
                 }
                 Service::Processor(processor) => {
                     task_handles.push(tokio::spawn(async move {
-                        let res = processor.start(shutdown_rx_clone).await;
+                        let res = processor.start(shutdown_rx_clone, metrics).await;
                         (service_id_clone, res)
                     }));
                 }
                 Service::Exporter(exporter) => {
-                    // task_handles.push(tokio::spawn(async move {
-                    //     let res = exporter.start(shutdown_rx_clone).await;
-                    //     (service_id_clone, res)
-                    // }));
+                    task_handles.push(tokio::spawn(async move {
+                        let res = exporter.start(shutdown_rx_clone, metrics).await;
+                        (service_id_clone, res)
+                    }));
                 }
             }
             // for edge in dependencies {

@@ -54,4 +54,4 @@ tracing-subscriber = { version = "0", features = ["json", "env-filter"] }
 color-eyre = "0"
 clap = { version = "4", features = ["derive"] }
 tokio = { version = "1", features = ["full"] }
-tokio-stream = { version = "0", features = ["sync"] }
+tokio-stream = { version = "0", features = ["sync", "time"] }
