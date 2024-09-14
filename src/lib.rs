@@ -6,6 +6,7 @@ pub mod config;
 pub mod consumer;
 pub mod doc;
 pub mod ext;
+pub mod factory;
 pub mod metrics;
 pub mod mongodb;
 pub mod otlp;

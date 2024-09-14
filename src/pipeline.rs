@@ -1,7 +1,6 @@
 use crate::{config, ext::GraphExt};
 use color_eyre::eyre;
 use futures::{Stream, StreamExt};
-// use tokio::stream::{Stream, StreamExt};
 use opentelemetry_sdk::{
     export::{logs::LogData, trace::SpanData},
     metrics::{
@@ -96,9 +95,7 @@ impl Receiver for MongoDbReceiver {
     fn id(&self) -> &str {
         &self.id
     }
-    // async fn start(&self, shutdown_rx: watch::Receiver<bool>) -> eyre::Result<()> {
     async fn start(self: Box<Self>, mut shutdown_rx: watch::Receiver<bool>) -> eyre::Result<()> {
-        // async fn start(self: Arc<Self>, shutdown_rx: watch::Receiver<bool>) -> eyre::Result<()> {
         // send data each second
         let mut interval = tokio::time::interval(std::time::Duration::from_secs(1));
         interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
@@ -174,247 +171,19 @@ pub struct OtlpExporter {
     // 	// We almost read 0 bytes, so no need to tune ReadBufferSize.
     // 	WriteBufferSize: 512 * 1024,
     // },
-
-    // return exporterhelper.NewTracesExporter(ctx, set, cfg,
-    // 	oce.pushTraces,
-    // 	exporterhelper.WithCapabilities(consumer.Capabilities{MutatesData: false}),
-    // 	exporterhelper.WithTimeout(oCfg.TimeoutSettings),
-    // 	exporterhelper.WithRetry(oCfg.RetryConfig),
-    // 	exporterhelper.WithQueue(oCfg.QueueConfig),
-    // 	exporterhelper.WithBatcher(oCfg.BatcherConfig),
-    // 	exporterhelper.WithStart(oce.start),
-    // 	exporterhelper.WithShutdown(oce.shutdown),
-    // )
 }
-// type baseExporter struct {
-// 	// Input configuration.
-// 	config *Config
-//
-// 	// gRPC clients and connection.
-// 	traceExporter  ptraceotlp.GRPCClient
-// 	metricExporter pmetricotlp.GRPCClient
-// 	logExporter    plogotlp.GRPCClient
-// 	clientConn     *grpc.ClientConn
-// 	metadata       metadata.MD
-// 	callOptions    []grpc.CallOption
-//
-// 	settings component.TelemetrySettings
-//
-// 	// Default user-agent header.
-// 	userAgent string
-// }
-//
-// func newExporter(cfg component.Config, set exporter.Settings) *baseExporter {
-// 	oCfg := cfg.(*Config)
-//
-// 	userAgent := fmt.Sprintf("%s/%s (%s/%s)",
-// 		set.BuildInfo.Description, set.BuildInfo.Version, runtime.GOOS, runtime.GOARCH)
-//
-// 	return &baseExporter{config: oCfg, settings: set.TelemetrySettings, userAgent: userAgent}
-// }
-//
-// // start actually creates the gRPC connection. The client construction is deferred till this point as this
-// // is the only place we get hold of Extensions which are required to construct auth round tripper.
-// func (e *baseExporter) start(ctx context.Context, host component.Host) (err error) {
-// 	if e.clientConn, err = e.config.ClientConfig.ToClientConn(ctx, host, e.settings, grpc.WithUserAgent(e.userAgent)); err != nil {
-// 		return err
-// 	}
-// 	e.traceExporter = ptraceotlp.NewGRPCClient(e.clientConn)
-// 	e.metricExporter = pmetricotlp.NewGRPCClient(e.clientConn)
-// 	e.logExporter = plogotlp.NewGRPCClient(e.clientConn)
-// 	headers := map[string]string{}
-// 	for k, v := range e.config.ClientConfig.Headers {
-// 		headers[k] = string(v)
-// 	}
-// 	e.metadata = metadata.New(headers)
-// 	e.callOptions = []grpc.CallOption{
-// 		grpc.WaitForReady(e.config.ClientConfig.WaitForReady),
-// 	}
-//
-// 	return
-// }
-//
-// func (e *baseExporter) shutdown(context.Context) error {
-// 	if e.clientConn != nil {
-// 		return e.clientConn.Close()
-// 	}
-// 	return nil
-// }
-//
-// func (e *baseExporter) pushTraces(ctx context.Context, td ptrace.Traces) error {
-// 	req := ptraceotlp.NewExportRequestFromTraces(td)
-// 	resp, respErr := e.traceExporter.Export(e.enhanceContext(ctx), req, e.callOptions...)
-// 	if err := processError(respErr); err != nil {
-// 		return err
-// 	}
-// 	partialSuccess := resp.PartialSuccess()
-// 	if !(partialSuccess.ErrorMessage() == "" && partialSuccess.RejectedSpans() == 0) {
-// 		e.settings.Logger.Warn("Partial success response",
-// 			zap.String("message", resp.PartialSuccess().ErrorMessage()),
-// 			zap.Int64("dropped_spans", resp.PartialSuccess().RejectedSpans()),
-// 		)
-// 	}
-// 	return nil
-// }
-//
-// func (e *baseExporter) pushMetrics(ctx context.Context, md pmetric.Metrics) error {
-// 	req := pmetricotlp.NewExportRequestFromMetrics(md)
-// 	resp, respErr := e.metricExporter.Export(e.enhanceContext(ctx), req, e.callOptions...)
-// 	if err := processError(respErr); err != nil {
-// 		return err
-// 	}
-// 	partialSuccess := resp.PartialSuccess()
-// 	if !(partialSuccess.ErrorMessage() == "" && partialSuccess.RejectedDataPoints() == 0) {
-// 		e.settings.Logger.Warn("Partial success response",
-// 			zap.String("message", resp.PartialSuccess().ErrorMessage()),
-// 			zap.Int64("dropped_data_points", resp.PartialSuccess().RejectedDataPoints()),
-// 		)
-// 	}
-// 	return nil
-// }
-//
-// func (e *baseExporter) pushLogs(ctx context.Context, ld plog.Logs) error {
-// 	req := plogotlp.NewExportRequestFromLogs(ld)
-// 	resp, respErr := e.logExporter.Export(e.enhanceContext(ctx), req, e.callOptions...)
-// 	if err := processError(respErr); err != nil {
-// 		return err
-// 	}
-// 	partialSuccess := resp.PartialSuccess()
-// 	if !(partialSuccess.ErrorMessage() == "" && partialSuccess.RejectedLogRecords() == 0) {
-// 		e.settings.Logger.Warn("Partial success response",
-// 			zap.String("message", resp.PartialSuccess().ErrorMessage()),
-// 			zap.Int64("dropped_log_records", resp.PartialSuccess().RejectedLogRecords()),
-// 		)
-// 	}
-// 	return nil
-// }
-//
-// func (e *baseExporter) enhanceContext(ctx context.Context) context.Context {
-// 	if e.metadata.Len() > 0 {
-// 		return metadata.NewOutgoingContext(ctx, e.metadata)
-// 	}
-// 	return ctx
-// }
-//
-// func processError(err error) error {
-// 	if err == nil {
-// 		// Request is successful, we are done.
-// 		return nil
-// 	}
-//
-// 	// We have an error, check gRPC status code.
-// 	st := status.Convert(err)
-// 	if st.Code() == codes.OK {
-// 		// Not really an error, still success.
-// 		return nil
-// 	}
-//
-// 	// Now, this is a real error.
-// 	retryInfo := getRetryInfo(st)
-//
-// 	if !shouldRetry(st.Code(), retryInfo) {
-// 		// It is not a retryable error, we should not retry.
-// 		return consumererror.NewPermanent(err)
-// 	}
-//
-// 	// Check if server returned throttling information.
-// 	throttleDuration := getThrottleDuration(retryInfo)
-// 	if throttleDuration != 0 {
-// 		// We are throttled. Wait before retrying as requested by the server.
-// 		return exporterhelper.NewThrottleRetry(err, throttleDuration)
-// 	}
-//
-// 	// Need to retry.
-// 	return err
-// }
-//
-// func shouldRetry(code codes.Code, retryInfo *errdetails.RetryInfo) bool {
-// 	switch code {
-// 	case codes.Canceled,
-// 		codes.DeadlineExceeded,
-// 		codes.Aborted,
-// 		codes.OutOfRange,
-// 		codes.Unavailable,
-// 		codes.DataLoss:
-// 		// These are retryable errors.
-// 		return true
-// 	case codes.ResourceExhausted:
-// 		// Retry only if RetryInfo was supplied by the server.
-// 		// This indicates that the server can still recover from resource exhaustion.
-// 		return retryInfo != nil
-// 	}
-// 	// Don't retry on any other code.
-// 	return false
-// }
-//
-// func getRetryInfo(status *status.Status) *errdetails.RetryInfo {
-// 	for _, detail := range status.Details() {
-// 		if t, ok := detail.(*errdetails.RetryInfo); ok {
-// 			return t
-// 		}
-// 	}
-// 	return nil
-// }
-//
-// func getThrottleDuration(t *errdetails.RetryInfo) time.Duration {
-// 	if t == nil || t.RetryDelay == nil {
-// 		return 0
-// 	}
-// 	if t.RetryDelay.Seconds > 0 || t.RetryDelay.Nanos > 0 {
-// 		return time.Duration(t.RetryDelay.Seconds)*time.Second + time.Duration(t.RetryDelay.Nanos)*time.Nanosecond
-// 	}
-// 	return 0
-// }
 
 fn build_transport_channel(
     config: &opentelemetry_otlp::ExportConfig,
     tls_config: Option<tonic::transport::ClientTlsConfig>,
 ) -> eyre::Result<tonic::transport::Channel> {
-    // let config = self.exporter_config;
-
-    // resolving endpoint string
-    // grpc doesn't have a "path" like http(See https://github.com/grpc/grpc/blob/master/doc/PROTOCOL-HTTP2.md)
-    // the path of grpc calls are based on the protobuf service definition
-    // so we won't append one for default grpc endpoints
-    // If users for some reason want to use a custom path, they can use env var or builder to pass it
-    // let endpoint = match env::var(signal_endpoint_var)
-    //     .ok()
-    //     .or(env::var(OTEL_EXPORTER_OTLP_ENDPOINT).ok())
-    // {
-    //     Some(val) => val,
-    //     None => {
-    //         if config.endpoint.is_empty() {
-    //             OTEL_EXPORTER_OTLP_GRPC_ENDPOINT_DEFAULT.to_string()
-    //         } else {
-    //             config.endpoint
-    //         }
-    //     }
-    // };
-
     let endpoint = tonic::transport::Channel::from_shared(config.endpoint.clone())?;
-    // .map_err(crate::Error::from)?;
-    // let timeout = match env::var(signal_timeout_var)
-    //     .ok()
-    //     .or(env::var(OTEL_EXPORTER_OTLP_TIMEOUT).ok())
-    // {
-    //     Some(val) => match val.parse() {
-    //         Ok(seconds) => Duration::from_secs(seconds),
-    //         Err(_) => config.timeout,
-    //     },
-    //     None => config.timeout,
-    // };
-
-    // #[cfg(feature = "tls")]
     let channel = match tls_config {
         Some(tls_config) => endpoint.tls_config(tls_config)?,
-        // .map_err(crate::Error::from)?,
         None => endpoint,
     };
 
     Ok(channel.timeout(config.timeout).connect_lazy())
-
-    // #[cfg(not(feature = "tls"))]
-    // let channel = endpoint.timeout(timeout).connect_lazy();
 }
 
 impl OtlpExporter {
@@ -426,10 +195,7 @@ impl OtlpExporter {
 
         let config: config::OtlpExporterConfig = serde_yaml::from_value(config)?;
 
-        // use tonic::metadata::{KeyAndValueRef, MetadataMap};
         let metadata = tonic::metadata::MetadataMap::default();
-        // let timeout = std::time::Duration::from_secs(60);
-        // let user_agent = "";
 
         let export_config = || opentelemetry_otlp::ExportConfig {
             endpoint: config.endpoint.clone(),
@@ -440,12 +206,6 @@ impl OtlpExporter {
         let tls_config = None;
         let channel = build_transport_channel(&export_config(), tls_config)?;
 
-        // TODO: create tls config from config
-        // let tls_config = tonic::transport::ClientTlsConfig {};
-
-        // let trace_config: Option<sdk::trace::Config>,
-        // let trace_config = opentelemetry_sdk::trace::Trace::default();
-        // let trace_config = opentelemetry_sdk::meter::Trace::default();
         let batch_config = opentelemetry_sdk::trace::BatchConfig::default();
         // userAgent := fmt.Sprintf("%s/%s (%s/%s)",
         //     set.BuildInfo.Description, set.BuildInfo.Version, runtime.GOOS, runtime.GOARCH)
@@ -534,18 +294,9 @@ impl Exporter for OtlpExporter {
         mut metrics: MetricsStream,
     ) -> eyre::Result<()> {
         tracing::debug!("{} is running", self.id);
-        // let metric_handle = tokio::spawn(|| async move {});
-        // loop {
-        //     let metric = tokio::select! {
-        //         metric = metrics.next() => metric,
-        //         _ = shutdown_rx.changed() => return;
-        //     };
-        // };
-        // metric_handle.await
         while let Some(metric) = metrics.next().await {
             tracing::debug!("{} received metric {:?}", self.id, metric);
         }
-        // async fn start(self: Arc<Self>, shutdown_rx: watch::Receiver<bool>) -> eyre::Result<()> {
         Ok(())
     }
 }
@@ -617,11 +368,6 @@ pub trait Receiver: Producer + std::fmt::Debug + Send + Sync + 'static {
 #[async_trait::async_trait]
 pub trait Producer: Send + Sync + 'static {
     fn metrics(&self) -> BroadcastStream<MetricPayload>;
-    //     BroadcastStream::new(futures::stream::empty())
-    // }
-
-    // fn logs(&self) -> Option<broadcast::Receiver<LogRecord>>;
-    // async fn start(self: Arc<Self>, shutdown_rx: watch::Receiver<bool>) -> eyre::Result<()>;
 }
 
 #[async_trait::async_trait]
@@ -633,29 +379,25 @@ pub trait Processor: Producer + std::fmt::Debug + Send + Sync + 'static {
     }
 
     async fn start(
-        // &self,
         self: Box<Self>,
         shutdown_rx: watch::Receiver<bool>,
         metrics: MetricsStream,
     ) -> eyre::Result<()>;
-    // async fn start(self: Arc<Self>, shutdown_rx: watch::Receiver<bool>) -> eyre::Result<()>;
 }
 
 pub type MetricPayload = String;
 pub type TracesPayload = String;
 pub type LogPayload = String;
 
-// pub type MetricsStream = Box<dyn Stream<Item = MetricPayload> + Send + Sync + Unpin>;
-// pub type MetricsStream = BroadcastStream<MetricPayload>;
 pub type MetricsStream = tokio_stream::StreamMap<ServiceIdentifier, BroadcastStream<MetricPayload>>;
-// pub type MetricsStream = BroadcastStream<dyn Stream<Item = MetricPayload> + Send + Sync + Unpin>;
-// BroadcastStream
-
-// pub type TracesStream = Box<dyn Stream<Item = TracesPayload> + Send + Sync>;
-// pub type LogStream = Box<dyn Stream<Item = LogPayload> + Send + Sync>;
 
 #[async_trait::async_trait]
 pub trait Exporter: std::fmt::Debug + Send + Sync + 'static {
+    // var (
+    //     Type      = component.MustNewType("otlp")
+    //     ScopeName = "go.opentelemetry.io/collector/exporter/otlpexporter"
+    // )
+
     fn id(&self) -> &str;
 
     fn service_id(&self) -> ServiceIdentifier {
@@ -664,22 +406,16 @@ pub trait Exporter: std::fmt::Debug + Send + Sync + 'static {
 
     async fn start(
         self: Box<Self>,
-        // &self,
         shutdown_rx: watch::Receiver<bool>,
         metrics: MetricsStream,
     ) -> eyre::Result<()>;
-    // async fn start(self: Arc<Self>, shutdown_rx: watch::Receiver<bool>) -> eyre::Result<()>;
 }
 
-// #[derive(Debug, Clone, strum::Display)]
 #[derive(Debug, strum::Display)]
 pub enum Service {
     Receiver(Box<dyn Receiver>),
     Processor(Box<dyn Processor>),
     Exporter(Box<dyn Exporter>),
-    // Receiver(Arc<dyn Receiver>),
-    // Processor(Arc<dyn Processor>),
-    // Exporter(Arc<dyn Exporter>),
 }
 
 impl Service {
@@ -699,15 +435,6 @@ impl Service {
             Self::Exporter(exporter) => exporter.service_id(),
         }
     }
-
-    //     pub fn as_producer(&self) -> Option<&dyn Producer> {
-    //         match self {
-    //             Self::Receiver(receiver) => Some(receiver.as_ref() as &dyn Producer),
-    //             Self::Processor(processor) => Some(&processor),
-    //             // exporters do not produce metrics
-    //             Self::Exporter(_) => None,
-    //         }
-    //     }
 }
 
 #[derive(Debug, Copy, Clone, Hash, PartialEq, Eq, PartialOrd, Ord, strum::Display)]
@@ -827,7 +554,6 @@ pub type PipelineGraph = petgraph::graph::DiGraph<PipelineNode, PipelineEdge>;
 pub struct Pipelines {
     pub services: HashMap<ServiceIdentifier, Service>,
     pub pipelines: PipelineGraph,
-    // pub pipelines: HashMap<String, PipelineGraph>,
 }
 
 impl Pipelines {
@@ -838,37 +564,11 @@ impl Pipelines {
         let mut services = HashMap::new();
 
         let mut graph = PipelineGraph::default();
-        // build the graph first
-        // let mut pipelines = HashMap::new();
-
-        // let pipelines = &config.service.pipelines.pipelines.values();
-        // let nodes = std::collections::HashSet::from_iter(
-        //     pipelines
-        //         .flat_map(|p| {
-        //             p.receivers
-        //                 .iter()
-        //                 .map(|id| ServiceIdentifier::Receiver(id.to_string()))
-        //         })
-        //         .chain(pipelines.flat_map(|p| {
-        //             p.processors
-        //                 .iter()
-        //                 .map(|id| ServiceIdentifier::Processor(id.to_string()))
-        //         }))
-        //         .chain(pipelines.flat_map(|p| {
-        //             p.exporters
-        //                 .iter()
-        //                 .map(|id| ServiceIdentifier::Exporter(id.to_string()))
-        //         })),
-        // );
 
         let source_node = graph.add_node(PipelineNode::Source);
         let sink_node = graph.add_node(PipelineNode::Sink);
 
         for (pipeline_id, pipeline) in config.service.pipelines.pipelines {
-            // if pipelines.contains_key(&pipeline_id) {
-            //     tracing::warn!("skipping duplicate pipeline {pipeline_id:?}");
-            //     continue;
-            // }
             let edge = match service_id(&pipeline_id).as_deref() {
                 Some("metrics") => PipelineEdge::Metrics,
                 Some("logs") => PipelineEdge::Logs,
@@ -883,7 +583,6 @@ impl Pipelines {
                 }
             };
 
-            // let mut graph = PipelineGraph::default();
             let receiver_nodes = pipeline
                 .receivers
                 .iter()
@@ -891,7 +590,6 @@ impl Pipelines {
                     graph.get_or_insert_node(PipelineNode::Service(ServiceIdentifier::Receiver(
                         receiver_id.to_string(),
                     )))
-                    // graph.add_node(ServiceIdentifier::Receiver(receiver_id.to_string()))
                 })
                 .collect::<Vec<_>>();
 
@@ -907,7 +605,6 @@ impl Pipelines {
                     graph.get_or_insert_node(PipelineNode::Service(ServiceIdentifier::Processor(
                         processor_id.to_string(),
                     )))
-                    // graph.add_node(ServiceIdentifier::Processor(processor_id.to_string()))
                 })
                 .collect::<Vec<_>>();
 
@@ -918,7 +615,6 @@ impl Pipelines {
                     graph.get_or_insert_node(PipelineNode::Service(ServiceIdentifier::Exporter(
                         exporter_id.to_string(),
                     )))
-                    // graph.add_node(ServiceIdentifier::Exporter(exporter_id.to_string()))
                 })
                 .collect::<Vec<_>>();
 
@@ -1020,14 +716,9 @@ impl Pipelines {
                     }
                 }
             }
-
-            // print_pipeline_paths(&graph, &receiver_nodes, &exporter_nodes);
-            // pipelines.insert(pipeline_id, graph);
         }
 
-        print_pipeline_paths(&graph); // , &receiver_nodes, &exporter_nodes);
-
-        // dbg!(&pipelines);
+        print_pipeline_paths(&graph);
 
         Ok(Self {
             services,
@@ -1036,11 +727,7 @@ impl Pipelines {
     }
 }
 
-fn print_pipeline_paths(
-    graph: &PipelineGraph,
-    // receiver_nodes: &[petgraph::graph::NodeIndex],
-    // exporter_nodes: &[petgraph::graph::NodeIndex],
-) {
+fn print_pipeline_paths(graph: &PipelineGraph) {
     tracing::debug!("=== PIPELINES:");
     let mut sources = graph.externals(petgraph::Direction::Incoming);
     let mut sinks = graph.externals(petgraph::Direction::Outgoing);
@@ -1048,19 +735,6 @@ fn print_pipeline_paths(
     assert_eq!(sources.next(), None);
     let sink = sinks.next().unwrap();
     assert_eq!(sinks.next(), None);
-
-    // assert!(source);
-    // let receiver_nodes = graph.externals(petgraph::Direction::Incoming);
-    // let exporter_nodes = graph.externals(petgraph::Direction::Outgoing);
-
-    // TODO: find all paths to leafs using dfs here, but for now its fine
-    // let start_end: Vec<(petgraph::graph::NodeIndex, petgraph::graph::NodeIndex)> = receiver_nodes
-    //     .flat_map(|receiver_node| {
-    //         exporter_nodes
-    //             .clone()
-    //             .map(move |exporter_node| (receiver_node, exporter_node))
-    //     })
-    //     .collect();
 
     let start_end = [(source, sink)];
     dbg!(start_end);
@@ -1095,59 +769,33 @@ fn print_pipeline_paths(
     }
 }
 
-// pub fn chain_dependencies<N, E>(
 pub fn chain_dependencies<Ty, Ix>(
-    // graph: &petgraph::Graph<N, E, PipelineEdge, PipelineNode>,
     graph: &petgraph::Graph<PipelineNode, PipelineEdge, Ty, Ix>,
     services: &HashMap<ServiceIdentifier, Service>,
     dependencies: petgraph::graph::Edges<'_, PipelineEdge, Ty, Ix>,
-    // dependencies: petgraph::graph::Edges<'_, PipelineEdge, petgraph::Directed, Ty, Ix>,
 ) -> (MetricsStream,)
 where
-    // petgraph::Graph<N, E, PipelineEdge, PipelineNode>: petgraph::data::DataMap,
-    Ty: petgraph::EdgeType, // + petgraph::adj::IndexType,
+    Ty: petgraph::EdgeType,
     Ix: petgraph::graph::IndexType,
 {
     use petgraph::visit::{EdgeRef, NodeRef};
-    // find all the metrics
-    // let mut metrics: Vec<MetricsStream> = vec![];
     let mut merged_metrics = MetricsStream::new();
     for dep in dependencies {
-        // let dep_id: &PipelineNode = dep.target().index()).unwrap();
-        // let dep_id: &PipelineNode = graph.node_weight(dep.target()).unwrap();
         let Some(PipelineNode::Service(dep_id)) = graph.node_weight(dep.target()) else {
             continue;
         };
-        // let dep_id: PipelineNode = graph.node_weight(dep.target()).unwrap().clone();
         let dep_service = services.get(dep_id).unwrap();
-        // let dep_id = graph.node_weight(&dep.target().wei).unwrap();
         match dep.weight() {
             PipelineEdge::Metrics => {
                 if let Some(metrics) = dep_service.metrics() {
                     merged_metrics.insert(dep_service.service_id(), metrics);
                 }
-                // match dep_service {
-                //     Service::Receiver(receiver) => {
-                //         // let test = receiver.metrics();
-                //         // metrics.push(receiver.metrics());
-                //         metrics.insert(receiver.service_id(), receiver.metrics());
-                //     }
-                //     _ => {}
-                // };
-                // metrics.push(dep_service.);
             }
             PipelineEdge::Traces => {}
             PipelineEdge::Logs => {}
         }
     }
     (merged_metrics,)
-    // let mut map = tokio_stream::StreamMap::from_iter(metrics);
-
-    // Insert both streams
-    // map.insert("one", rx1);
-    // map.insert("two", rx2);
-    // let metrics
-    // (metrics.chain())
 }
 
 #[derive(Debug)]
@@ -1156,7 +804,6 @@ pub struct PipelineExecutor {
 }
 
 impl PipelineExecutor {
-    // pub async fn start(&self, mut shutdown_rx: watch::Receiver<bool>) -> eyre::Result<()> {
     pub async fn start(mut self, mut shutdown_rx: watch::Receiver<bool>) -> eyre::Result<()> {
         use futures::stream::FuturesUnordered;
         use futures::stream::StreamExt;
@@ -1165,28 +812,12 @@ impl PipelineExecutor {
         let mut task_handles: FuturesUnordered<JoinHandle<(ServiceIdentifier, eyre::Result<()>)>> =
             FuturesUnordered::new();
 
-        // start the services
-        // for (pipeline_id, pipeline_graph) in self.pipelines.pipelines.iter() {
-        // let mut pipeline_graph = pipeline_graph.clone();
-        let mut pipeline_graph = self.pipelines.pipelines.clone();
+        let mut pipeline_graph = self.pipelines.pipelines;
 
         // start with the sinks, then go up to the sources
         // this way, nodes up the pipeline do not exit prematurely due to having zero subscribers
         pipeline_graph.reverse();
 
-        // let reversed_pipeline = pipeline.reverse();
-        // let reversed_pipeline = petgraph::visit::Reversed(pipeline);
-        // match service_id(pipeline_id).as_deref() {
-        // Some("metrics") => {
-        // let sources = pipeline_graph.externals(petgraph::Direction::Incoming);
-        // dbg!(sources
-        //     .clone()
-        //     .into_iter()
-        //     .map(|nx| pipeline_graph.node_weight(nx))
-        //     .collect::<Vec<_>>());
-
-        // for source in sources {
-        // let mut sources = pipeline_graph.externals(petgraph::Direction::Incoming);
         let mut sources = pipeline_graph.externals(petgraph::Direction::Incoming);
         let source = sources.next().unwrap();
         assert_eq!(sources.next(), None);
@@ -1198,29 +829,11 @@ impl PipelineExecutor {
                 continue;
             };
             let service = self.pipelines.services.remove(service_id).unwrap();
-            // let service = self.pipelines.services.get(service_id).unwrap();
-            // let service = self.pipelines.services.get(service_id).unwrap().clone();
-            // if let PipelineNode::Source | PipelineNode::Sink = node {
-            //     continue;
-            // }
-            // we can access `graph` mutably here still
-            // let mut inputs = pipeline_graph.edges_directed(nx, petgraph::Direction::Outgoing);
-            // let mut inputs =
-            //     pipeline_graph.neighbors_directed(nx, petgraph::Direction::Outgoing);
-            // .detach();
 
-            // while let Some((outgoing_edge_idx, next_node_idx)) = edges.next(self) {
             tracing::debug!("starting {:?}", pipeline_graph.node_weight(node_idx));
 
-            // let
-
-            // while let Some((outgoing_edge_idx, next_node_idx)) = inputs.next() {
-            // while let Some(edge) = inputs.next() {
-            // while let Some(next_node_idx) = inputs.next() {
             let dependencies =
                 pipeline_graph.edges_directed(node_idx, petgraph::Direction::Outgoing);
-
-            // todo: combine the streams here
 
             let shutdown_rx_clone = shutdown_rx.clone();
             let service_id_clone = service_id.clone();
@@ -1249,82 +862,7 @@ impl PipelineExecutor {
                     }));
                 }
             }
-            // for edge in dependencies {
-            //     use petgraph::visit::EdgeRef;
-            //     tracing::debug!(
-            //         "\t with {} input {:?}",
-            //         edge.weight(),
-            //         pipeline_graph.node_weight(edge.target()), // pipeline_graph.node_weight(next_node_idx)
-            //     );
-            // }
-
-            // dbg!(inputs.into_iter().collect::<Vec<_>>());
-            // graph[nx] += 1;
         }
-        // }
-        // let sources = reversed_pipeline.extern
-        // task_handles.push(tokio::spawn(async move {
-        // let task_id = ServiceIdentifier::Exporter(exporter_clone.id().to_string());
-        // tracing::debug!("starting {task_id:?}");
-        // let res = exporter_clone.start(shutdown_rx_clone).await;
-        // (task_id, res)
-        // }));
-        // }
-        // Some("traces") => {}
-        // Some("logs") => {}
-        // other => {
-        //     tracing::warn!("unkown pipeline type");
-        //     continue;
-        // }
-        // }
-        // }
-
-        // for exporter in self.exporters.values() {
-        //     let shutdown_rx_clone = shutdown_rx.clone();
-        //     let exporter_clone = exporter.clone();
-        //     task_handles.push(tokio::spawn(async move {
-        //         let task_id = ServiceIdentifier::Exporter(exporter_clone.id().to_string());
-        //         tracing::debug!("starting {task_id:?}");
-        //         let res = exporter_clone.start(shutdown_rx_clone).await;
-        //         (task_id, res)
-        //     }));
-        // }
-
-        // for exporter in self.exporters.values() {
-        //     let shutdown_rx_clone = shutdown_rx.clone();
-        //     let exporter_clone = exporter.clone();
-        //     task_handles.push(tokio::spawn(async move {
-        //         let task_id = ServiceIdentifier::Exporter(exporter_clone.id().to_string());
-        //         tracing::debug!("starting {task_id:?}");
-        //         let res = exporter_clone.start(shutdown_rx_clone).await;
-        //         (task_id, res)
-        //     }));
-        // }
-        //
-        // for processor in self.processors.values() {
-        //     let shutdown_rx_clone = shutdown_rx.clone();
-        //     let processor_clone = processor.clone();
-        //     task_handles.push(tokio::spawn(async move {
-        //         let task_id = ServiceIdentifier::Processor(processor_clone.id().to_string());
-        //         tracing::debug!("starting {task_id:?}");
-        //         let res = processor_clone.start(shutdown_rx_clone).await;
-        //         (task_id, res)
-        //     }));
-        // }
-        //
-        // for receiver in self.receivers.values() {
-        //     let shutdown_rx_clone = shutdown_rx.clone();
-        //     let receiver_clone = receiver.clone();
-        //     task_handles.push(tokio::spawn(async move {
-        //         let task_id = ServiceIdentifier::Receiver(receiver_clone.id().to_string());
-        //         tracing::debug!("starting {task_id:?}");
-        //         let res = receiver_clone.start(shutdown_rx_clone).await;
-        //         (task_id, res)
-        //     }));
-        // }
-        //
-        // // setup the pipelines
-        // for receiver in self.services.values() {}
 
         // wait for all tasks to complete
         while let Some(Ok((task_id, res))) = task_handles.next().await {

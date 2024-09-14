@@ -1277,6 +1277,7 @@ dependencies = [
  "opentelemetry_sdk",
  "petgraph",
  "prometheus",
+ "regex",
  "semver",
  "serde",
  "serde_yaml",
