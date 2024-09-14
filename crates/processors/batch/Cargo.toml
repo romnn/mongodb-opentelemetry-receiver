@@ -1,0 +1,47 @@
+[package]
+name = "otel-batch-processor"
+version = "0.1.0"
+edition = "2021"
+publish = true
+authors = ["romnn <contact@romnn.com>"]
+description = "Opentelemetry (OTEL) batch processor"
+license-file = "../../LICENSE"
+readme = "./README.md"
+documentation = "https://docs.rs/nvbit-rs"
+homepage = "https://github.com/romnn/nvbit-rs"
+repository = "https://github.com/romnn/nvbit-rs"
+categories = [
+	"api-bindings",
+	"asynchronous",
+	"development-tools::profiling",
+	"development-tools::debugging",
+]
+keywords = [
+	"otel-collector",
+	"opentelemetry",
+	"telemetry",
+]
+exclude = []
+
+[dependencies]
+# utils
+color-eyre = "0"
+thiserror = "1"
+lazy_static = "1"
+# strum = { version = "0", features = ["derive"] }
+
+# tracing
+tracing = "0"
+
+# config parsing
+serde = "1"
+serde_yaml = "0"
+duration-string = { version = "0", features = ["serde"] }
+
+# async
+async-trait = "0"
+futures = "0.3"
+tokio = { version = "1", features = ["full"] }
+tokio-stream = { version = "0", features = ["sync", "time"] }
+
+otel-collector-component = { path = "../../component" }

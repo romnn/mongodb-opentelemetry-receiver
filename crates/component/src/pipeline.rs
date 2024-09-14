@@ -1,13 +1,14 @@
-use crate::{config, ext::GraphExt};
+use crate::{config, MetricPayload, ServiceError, ServiceIdentifier, ServiceKind};
 use color_eyre::eyre;
 use futures::{Stream, StreamExt};
-use opentelemetry_sdk::{
-    export::{logs::LogData, trace::SpanData},
-    metrics::{
-        data::{ResourceMetrics, Temporality},
-        exporter,
-    },
-};
+// use opentelemetry_sdk::{
+//     export::trace::SpanData,
+//     logs::LogData,
+//     metrics::{
+//         data::{ResourceMetrics, Temporality},
+//         exporter,
+//     },
+// };
 use petgraph::data::{Build, DataMap};
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -15,83 +16,56 @@ use tokio::sync::watch;
 use tokio::{net::unix::pipe::pipe, sync::broadcast};
 use tokio_stream::wrappers::BroadcastStream;
 
-#[derive(Debug, Clone, Hash, PartialEq, Eq, PartialOrd, Ord)]
-pub enum ServiceIdentifier {
-    Receiver(String),
-    Exporter(String),
-    Processor(String),
+pub trait GraphExt<N, E, Ix> {
+    fn get_or_insert_node(&mut self, weight: N) -> petgraph::graph::NodeIndex<Ix>
+    where
+        N: PartialEq;
 }
 
-impl std::fmt::Display for ServiceIdentifier {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        std::fmt::Debug::fmt(self, f)
-    }
-}
-
-impl From<ServiceIdentifier> for ServiceKind {
-    fn from(value: ServiceIdentifier) -> Self {
-        match value {
-            ServiceIdentifier::Receiver(_) => Self::Receiver,
-            ServiceIdentifier::Processor(_) => Self::Processor,
-            ServiceIdentifier::Exporter(_) => Self::Exporter,
+impl<N, E, D, Ix> GraphExt<N, E, Ix> for petgraph::Graph<N, E, D, Ix>
+where
+    D: petgraph::EdgeType,
+    Ix: petgraph::graph::IndexType,
+{
+    fn get_or_insert_node(&mut self, weight: N) -> petgraph::graph::NodeIndex<Ix>
+    where
+        N: PartialEq,
+    {
+        let found = self
+            .node_indices()
+            .find(|idx| match self.node_weight(*idx) {
+                Some(node) => weight == *node,
+                None => false,
+            });
+        match found {
+            Some(found) => found,
+            None => petgraph::Graph::<N, E, D, Ix>::add_node(self, weight),
         }
     }
 }
 
-impl ServiceIdentifier {
-    pub fn kind(&self) -> ServiceKind {
-        match self {
-            Self::Receiver(_) => ServiceKind::Receiver,
-            Self::Processor(_) => ServiceKind::Processor,
-            Self::Exporter(_) => ServiceKind::Exporter,
-        }
-    }
-
-    pub fn id(&self) -> &str {
-        match self {
-            Self::Receiver(id) | Self::Exporter(id) | Self::Processor(id) => id.as_str(),
-        }
-    }
-}
-
-#[inline]
-pub fn service_id(value: &str) -> Option<String> {
-    value.split("/").next().map(|id| id.to_ascii_lowercase())
-}
-
-#[derive()]
-pub struct MongoDbReceiver {
+#[derive(Debug)]
+pub struct TimestampReceiver {
     pub id: String,
-    pub config: config::MongoDbReceiverConfig,
     pub metrics_tx: broadcast::Sender<MetricPayload>,
-    // pub metrics_rx: broadcast::Sender<MetricPayload>,
+    pub interval: std::time::Duration,
 }
 
-impl std::fmt::Debug for MongoDbReceiver {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("MongoDbReceiver")
-            .field("id", &self.id)
-            .field("config", &self.config)
-            .finish()
-    }
-}
+pub const DEFAULT_BUFFER_SIZE: usize = 1024;
 
-pub const BUFFER_SIZE: usize = 1024;
-
-impl MongoDbReceiver {
-    pub fn from_config(id: String, config: serde_yaml::Value) -> eyre::Result<Self> {
-        let config: config::MongoDbReceiverConfig = serde_yaml::from_value(config)?;
-        let (metrics_tx, _) = broadcast::channel(BUFFER_SIZE);
-        Ok(Self {
+impl TimestampReceiver {
+    pub fn from_config(id: String, interval: std::time::Duration) -> Self {
+        let (metrics_tx, _) = broadcast::channel(DEFAULT_BUFFER_SIZE);
+        Self {
             id,
-            config,
             metrics_tx,
-        })
+            interval,
+        }
     }
 }
 
 #[async_trait::async_trait]
-impl Receiver for MongoDbReceiver {
+impl crate::Receiver for TimestampReceiver {
     fn id(&self) -> &str {
         &self.id
     }
@@ -101,23 +75,33 @@ impl Receiver for MongoDbReceiver {
         interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
         let mut interval_stream = tokio_stream::wrappers::IntervalStream::new(interval);
         loop {
-            tokio::select! {
-                tick = interval_stream.next() => match tick {
-                    Some(instant) => {
-                        tracing::debug!(queue_size = self.metrics_tx.len(), num_receivers = self.metrics_tx.receiver_count(), "sending tick {instant:?}");
-                        self.metrics_tx.send(format!("mock metric: {instant:?}"));
-                    }
-                    None => break,
-                },
+            let tick = tokio::select! {
+                tick = interval_stream.next() => tick,
                 _ = shutdown_rx.changed() => break,
+            };
+
+            // tokio::select! {
+            //     tick = interval_stream.next() => match tick {
+            match tick {
+                Some(instant) => {
+                    tracing::debug!(
+                        queue_size = self.metrics_tx.len(),
+                        num_receivers = self.metrics_tx.receiver_count(),
+                        "sending tick {instant:?}"
+                    );
+                    self.metrics_tx.send(format!("mock metric: {instant:?}"));
+                }
+                None => break,
             }
+            //     },
+            //     _ = shutdown_rx.changed() => break,
+            // }
         }
         Ok(())
     }
 }
 
-#[async_trait::async_trait]
-impl Producer for MongoDbReceiver {
+impl crate::Producer for TimestampReceiver {
     fn metrics(&self) -> BroadcastStream<MetricPayload> {
         BroadcastStream::new(self.metrics_tx.subscribe())
     }
@@ -149,273 +133,11 @@ impl OtlpReceiver {
 //     }
 // }
 
-#[derive(Debug)]
-pub struct OtlpExporter {
-    pub id: String,
-    pub config: config::OtlpExporterConfig,
-    // trace_config: Option<sdk::trace::Config>,
-    // batch_config: Option<sdk::trace::BatchConfig>,
-    trace_exporter: opentelemetry_otlp::SpanExporter,
-    log_exporter: opentelemetry_otlp::LogExporter,
-    metrics_exporter: opentelemetry_otlp::MetricsExporter,
-    // metadata       opentelemetry_otlp::Me
-    // use opentelemetry_otlp::WithExportConfig;
-    // TimeoutSettings: exporterhelper.NewDefaultTimeoutSettings(),
-    // RetryConfig:     configretry.NewDefaultBackOffConfig(),
-    // QueueConfig:     exporterhelper.NewDefaultQueueSettings(),
-    // BatcherConfig:   batcherCfg,
-    // ClientConfig: configgrpc.ClientConfig{
-    // 	Headers: map[string]configopaque.String{},
-    // 	// Default to gzip compression
-    // 	Compression: configcompression.TypeGzip,
-    // 	// We almost read 0 bytes, so no need to tune ReadBufferSize.
-    // 	WriteBufferSize: 512 * 1024,
-    // },
-}
-
-fn build_transport_channel(
-    config: &opentelemetry_otlp::ExportConfig,
-    tls_config: Option<tonic::transport::ClientTlsConfig>,
-) -> eyre::Result<tonic::transport::Channel> {
-    let endpoint = tonic::transport::Channel::from_shared(config.endpoint.clone())?;
-    let channel = match tls_config {
-        Some(tls_config) => endpoint.tls_config(tls_config)?,
-        None => endpoint,
-    };
-
-    Ok(channel.timeout(config.timeout).connect_lazy())
-}
-
-impl OtlpExporter {
-    pub fn from_config(id: String, config: serde_yaml::Value) -> eyre::Result<Self> {
-        use opentelemetry_otlp::WithExportConfig;
-        use opentelemetry_sdk::metrics::reader::{
-            DefaultAggregationSelector, DefaultTemporalitySelector,
-        };
-
-        let config: config::OtlpExporterConfig = serde_yaml::from_value(config)?;
-
-        let metadata = tonic::metadata::MetadataMap::default();
-
-        let export_config = || opentelemetry_otlp::ExportConfig {
-            endpoint: config.endpoint.clone(),
-            protocol: opentelemetry_otlp::Protocol::Grpc,
-            timeout: std::time::Duration::from_secs(60),
-        };
-
-        let tls_config = None;
-        let channel = build_transport_channel(&export_config(), tls_config)?;
-
-        let batch_config = opentelemetry_sdk::trace::BatchConfig::default();
-        // userAgent := fmt.Sprintf("%s/%s (%s/%s)",
-        //     set.BuildInfo.Description, set.BuildInfo.Version, runtime.GOOS, runtime.GOARCH)
-
-        // TODO: only set settings that make sense here...
-        let metrics_exporter = opentelemetry_otlp::new_exporter()
-            .tonic()
-            // .with_channel(channel.clone())
-            .with_compression(opentelemetry_otlp::Compression::Gzip)
-            // .with_protocol(opentelemetry_otlp::Protocol::Grpc)
-            .with_metadata(metadata.clone())
-            // .with_timeout(timeout)
-            .with_export_config(export_config())
-            // .with_tls_config(TODO)
-            .build_metrics_exporter(
-                Box::new(DefaultAggregationSelector::new()),
-                Box::new(DefaultTemporalitySelector::new()),
-            )?;
-        let log_exporter = opentelemetry_otlp::new_exporter()
-            .tonic()
-            // .with_channel(channel.clone())
-            .with_compression(opentelemetry_otlp::Compression::Gzip)
-            // .with_protocol(opentelemetry_otlp::Protocol::Grpc)
-            .with_metadata(metadata.clone())
-            .with_export_config(export_config())
-            // .with_timeout(timeout)
-            // .with_tls_config(TODO)
-            .build_log_exporter()?;
-        let trace_exporter = opentelemetry_otlp::new_exporter()
-            .tonic()
-            // .with_channel(channel.clone())
-            .with_compression(opentelemetry_otlp::Compression::Gzip)
-            // .with_protocol(opentelemetry_otlp::Protocol::Grpc)
-            .with_metadata(metadata.clone())
-            .with_export_config(export_config())
-            // .with_timeout(timeout)
-            // .with_tls_config(TODO)
-            .build_span_exporter()?;
-        Ok(Self {
-            id,
-            config,
-            metrics_exporter,
-            trace_exporter,
-            log_exporter,
-        })
-    }
-
-    async fn export_metrics(&self, metrics: &mut ResourceMetrics) -> eyre::Result<()> {
-        use opentelemetry_sdk::metrics::exporter::PushMetricsExporter;
-        if let Err(err) = self.metrics_exporter.export(metrics).await {
-            tracing::error!("failed to export metrics: {err}");
-        }
-        Ok(())
-    }
-
-    async fn export_logs<'a>(
-        &'a mut self,
-        logs: Vec<std::borrow::Cow<'a, LogData>>,
-    ) -> eyre::Result<()> {
-        use opentelemetry_sdk::export::logs::LogExporter;
-        if let Err(err) = self.log_exporter.export(logs).await {
-            tracing::error!("failed to export logs: {err}");
-        }
-        Ok(())
-    }
-
-    async fn export_traces<'a>(&'a mut self, traces: Vec<SpanData>) -> eyre::Result<()> {
-        use opentelemetry_sdk::export::trace::SpanExporter;
-        if let Err(err) = self.trace_exporter.export(traces).await {
-            tracing::error!("failed to export logs: {err}");
-        }
-        Ok(())
-    }
-}
-
-#[async_trait::async_trait]
-impl Exporter for OtlpExporter {
-    fn id(&self) -> &str {
-        &self.id
-    }
-
-    async fn start(
-        // &self,
-        self: Box<Self>,
-        shutdown_rx: watch::Receiver<bool>,
-        mut metrics: MetricsStream,
-    ) -> eyre::Result<()> {
-        tracing::debug!("{} is running", self.id);
-        while let Some(metric) = metrics.next().await {
-            tracing::debug!("{} received metric {:?}", self.id, metric);
-        }
-        Ok(())
-    }
-}
-
-#[derive(Debug)]
-pub struct BatchProcessor {
-    pub id: String,
-    pub config: config::BatchProcessorConfig,
-    pub metrics_tx: broadcast::Sender<MetricPayload>,
-}
-
-impl BatchProcessor {
-    pub fn from_config(id: String, config: serde_yaml::Value) -> eyre::Result<Self> {
-        let config: config::BatchProcessorConfig = serde_yaml::from_value(config)?;
-        let (metrics_tx, _) = broadcast::channel(BUFFER_SIZE);
-        Ok(Self {
-            id,
-            config,
-            metrics_tx,
-        })
-    }
-}
-
-#[async_trait::async_trait]
-impl Processor for BatchProcessor {
-    fn id(&self) -> &str {
-        &self.id
-    }
-
-    async fn start(
-        self: Box<Self>,
-        shutdown_rx: watch::Receiver<bool>,
-        mut metrics: MetricsStream,
-    ) -> eyre::Result<()> {
-        while let Some((from, metric)) = metrics.next().await {
-            tracing::debug!("{} received metric {:?} from {:?}", self.id, metric, from);
-            let metric = match metric {
-                Ok(metric) => metric,
-                Err(err) => {
-                    continue;
-                }
-            };
-            if let Err(err) = self.metrics_tx.send(metric) {
-                tracing::error!("{} failed to send: {err}", self.service_id());
-            }
-        }
-        Ok(())
-    }
-}
-
-#[async_trait::async_trait]
-impl Producer for BatchProcessor {
-    fn metrics(&self) -> BroadcastStream<MetricPayload> {
-        BroadcastStream::new(self.metrics_tx.subscribe())
-    }
-}
-
-#[async_trait::async_trait]
-pub trait Receiver: Producer + std::fmt::Debug + Send + Sync + 'static {
-    fn id(&self) -> &str;
-
-    fn service_id(&self) -> ServiceIdentifier {
-        ServiceIdentifier::Receiver(self.id().to_string())
-    }
-
-    async fn start(self: Box<Self>, shutdown_rx: watch::Receiver<bool>) -> eyre::Result<()>;
-}
-
-#[async_trait::async_trait]
-pub trait Producer: Send + Sync + 'static {
-    fn metrics(&self) -> BroadcastStream<MetricPayload>;
-}
-
-#[async_trait::async_trait]
-pub trait Processor: Producer + std::fmt::Debug + Send + Sync + 'static {
-    fn id(&self) -> &str;
-
-    fn service_id(&self) -> ServiceIdentifier {
-        ServiceIdentifier::Processor(self.id().to_string())
-    }
-
-    async fn start(
-        self: Box<Self>,
-        shutdown_rx: watch::Receiver<bool>,
-        metrics: MetricsStream,
-    ) -> eyre::Result<()>;
-}
-
-pub type MetricPayload = String;
-pub type TracesPayload = String;
-pub type LogPayload = String;
-
-pub type MetricsStream = tokio_stream::StreamMap<ServiceIdentifier, BroadcastStream<MetricPayload>>;
-
-#[async_trait::async_trait]
-pub trait Exporter: std::fmt::Debug + Send + Sync + 'static {
-    // var (
-    //     Type      = component.MustNewType("otlp")
-    //     ScopeName = "go.opentelemetry.io/collector/exporter/otlpexporter"
-    // )
-
-    fn id(&self) -> &str;
-
-    fn service_id(&self) -> ServiceIdentifier {
-        ServiceIdentifier::Exporter(self.id().to_string())
-    }
-
-    async fn start(
-        self: Box<Self>,
-        shutdown_rx: watch::Receiver<bool>,
-        metrics: MetricsStream,
-    ) -> eyre::Result<()>;
-}
-
 #[derive(Debug, strum::Display)]
 pub enum Service {
-    Receiver(Box<dyn Receiver>),
-    Processor(Box<dyn Processor>),
-    Exporter(Box<dyn Exporter>),
+    Receiver(Box<dyn crate::Receiver>),
+    Processor(Box<dyn crate::Processor>),
+    Exporter(Box<dyn crate::Exporter>),
 }
 
 impl Service {
@@ -437,28 +159,6 @@ impl Service {
     }
 }
 
-#[derive(Debug, Copy, Clone, Hash, PartialEq, Eq, PartialOrd, Ord, strum::Display)]
-pub enum ServiceKind {
-    #[strum(serialize = "receiver")]
-    Receiver,
-    #[strum(serialize = "processor")]
-    Processor,
-    #[strum(serialize = "exporter")]
-    Exporter,
-}
-
-#[derive(Debug, thiserror::Error)]
-pub enum ServiceError {
-    #[error("missing {kind} {id:?}")]
-    MissingService { kind: ServiceKind, id: String },
-    #[error("invalid {kind} identifier {id:?}")]
-    InvalidFormat { kind: ServiceKind, id: String },
-    #[error("unknown {kind} {id:?}")]
-    UnknownService { kind: ServiceKind, id: String },
-    #[error(transparent)]
-    Service(Box<dyn std::error::Error + Send + Sync + 'static>),
-}
-
 pub struct BuiltinServiceBuilder {}
 
 #[async_trait::async_trait]
@@ -473,32 +173,23 @@ pub trait ServiceBuilder {
             (ServiceKind::Processor, "debug") => {
                 todo!()
             }
-            (ServiceKind::Exporter, "otlp") => {
-                let otlp_exporter = OtlpExporter::from_config(unique_id.to_string(), raw_config)
-                    .map_err(|err| ServiceError::Service(err.into()))?;
-                // dbg!(&otlp_exporter);
-                Ok(Service::Exporter(Box::new(otlp_exporter)))
-                // Ok(Service::Exporter(Arc::new(otlp_exporter)))
-                // all_exporters.push(Arc::new(otlp_exporter));
-            }
-            (ServiceKind::Processor, "batch") => {
-                let batch_processor =
-                    BatchProcessor::from_config(unique_id.to_string(), raw_config)
-                        .map_err(|err| ServiceError::Service(err.into()))?;
-                // dbg!(&batch_processor);
-                Ok(Service::Processor(Box::new(batch_processor)))
-                // Ok(Service::Processor(Arc::new(batch_processor)))
-                // all_processors.push(Arc::new(batch_processor));
-            }
-            (ServiceKind::Receiver, "mongodb") => {
-                let mongodb_receiver =
-                    MongoDbReceiver::from_config(unique_id.to_string(), raw_config)
-                        .map_err(|err| ServiceError::Service(err.into()))?;
-                // dbg!(&mongodb_receiver);
-                Ok(Service::Receiver(Box::new(mongodb_receiver)))
-                // Ok(Service::Receiver(Arc::new(mongodb_receiver)))
-                // all_receivers.push(Arc::new(mongodb_receiver));
-            }
+            // (ServiceKind::Exporter, "otlp") => {
+            //     let otlp_exporter = OtlpExporter::from_config(unique_id.to_string(), raw_config)
+            //         .map_err(|err| ServiceError::Service(err.into()))?;
+            //     Ok(Service::Exporter(Box::new(otlp_exporter)))
+            // }
+            // (ServiceKind::Processor, "batch") => {
+            //     let batch_processor =
+            //         BatchProcessor::from_config(unique_id.to_string(), raw_config)
+            //             .map_err(|err| ServiceError::Service(err.into()))?;
+            //     Ok(Service::Processor(Box::new(batch_processor)))
+            // }
+            // (ServiceKind::Receiver, "mongodb") => {
+            //     let mongodb_receiver =
+            //         MongoDbReceiver::from_config(unique_id.to_string(), raw_config)
+            //             .map_err(|err| ServiceError::Service(err.into()))?;
+            //     Ok(Service::Receiver(Box::new(mongodb_receiver)))
+            // }
             // (ServiceKind::Receiver, "otlp") => {
             //     let otlp_receiver = OtlpReceiver::from_config(unique_id.to_string(), raw_config)
             //         .map_err(|err| ServiceError::Service(err.into()))?;
@@ -569,7 +260,7 @@ impl Pipelines {
         let sink_node = graph.add_node(PipelineNode::Sink);
 
         for (pipeline_id, pipeline) in config.service.pipelines.pipelines {
-            let edge = match service_id(&pipeline_id).as_deref() {
+            let edge = match crate::service_id(&pipeline_id).as_deref() {
                 Some("metrics") => PipelineEdge::Metrics,
                 Some("logs") => PipelineEdge::Logs,
                 Some("traces") => PipelineEdge::Traces,
@@ -686,7 +377,7 @@ impl Pipelines {
                 }
                 let unique_id = unique_service_id.id();
                 let service =
-                    service_id(&unique_id).ok_or_else(|| ServiceError::InvalidFormat {
+                    crate::service_id(&unique_id).ok_or_else(|| ServiceError::InvalidFormat {
                         kind: unique_service_id.kind(),
                         id: unique_id.to_string(),
                     })?;
@@ -773,13 +464,13 @@ pub fn chain_dependencies<Ty, Ix>(
     graph: &petgraph::Graph<PipelineNode, PipelineEdge, Ty, Ix>,
     services: &HashMap<ServiceIdentifier, Service>,
     dependencies: petgraph::graph::Edges<'_, PipelineEdge, Ty, Ix>,
-) -> (MetricsStream,)
+) -> (crate::MetricsStream,)
 where
     Ty: petgraph::EdgeType,
     Ix: petgraph::graph::IndexType,
 {
     use petgraph::visit::{EdgeRef, NodeRef};
-    let mut merged_metrics = MetricsStream::new();
+    let mut merged_metrics = crate::MetricsStream::new();
     for dep in dependencies {
         let Some(PipelineNode::Service(dep_id)) = graph.node_weight(dep.target()) else {
             continue;

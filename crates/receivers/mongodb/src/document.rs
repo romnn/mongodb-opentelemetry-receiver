@@ -1,5 +1,3 @@
-use std::fmt::Pointer;
-
 #[derive(Copy, Debug, Clone, Hash, PartialEq, Eq, PartialOrd, Ord)]
 pub enum BsonKey<'a> {
     KeyStr(&'a str),
@@ -176,9 +174,9 @@ pub fn get_path<'p, 'k: 'b, 'b: 'p + 'k>(
 macro_rules! path {
     ( $( $x:expr ),* ) => {
         {
-            let mut path: Vec<crate::doc::BsonKey> = Vec::new();
+            let mut path: Vec<crate::document::BsonKey> = Vec::new();
             $(
-                let key = crate::doc::BsonKey::from($x);
+                let key = crate::document::BsonKey::from($x);
                 path.push(key);
             )*
             path
@@ -218,11 +216,11 @@ macro_rules! path {
 macro_rules! get_i64 {
     ( $doc:expr, $( $x:expr ),* ) => {{
         let path = crate::path!($($x),*);
-        crate::doc::get_path($doc, path.as_slice()).and_then(|v|
-            crate::doc::BsonValue::get_i64(v).map_err(|err| {
-                crate::doc::Error {
-                    path: crate::doc::OwnedPath::from_iter(path.iter()),
-                    source: crate::doc::QueryError::InvalidType(err),
+        crate::document::get_path($doc, path.as_slice()).and_then(|v|
+            crate::document::BsonValue::get_i64(v).map_err(|err| {
+                crate::document::Error {
+                    path: crate::document::OwnedPath::from_iter(path.iter()),
+                    source: crate::document::QueryError::InvalidType(err),
                 }
         }))
     }};
@@ -232,11 +230,11 @@ macro_rules! get_i64 {
 macro_rules! get_str{
     ( $doc:expr, $( $x:expr ),* ) => {{
         let path = crate::path!($($x),*);
-        crate::doc::get_path($doc, path.as_slice()).and_then(|v|
-            crate::doc::BsonValue::get_str(v).map_err(|err| {
-                crate::doc::Error {
-                    path: crate::doc::OwnedPath::from_iter(path.iter()),
-                    source: crate::doc::QueryError::InvalidType(err),
+        crate::document::get_path($doc, path.as_slice()).and_then(|v|
+            crate::document::BsonValue::get_str(v).map_err(|err| {
+                crate::document::Error {
+                    path: crate::document::OwnedPath::from_iter(path.iter()),
+                    source: crate::document::QueryError::InvalidType(err),
                 }
         }))
     }};

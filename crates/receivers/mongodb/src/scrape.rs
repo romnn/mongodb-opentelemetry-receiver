@@ -1,41 +1,12 @@
-use crate::ext::NumDatapoints;
-use crate::metrics;
-use crate::scrape::Scrape;
+use crate::metrics::{EmitMetric, Record, StorageEngine};
+use crate::Metrics;
 use color_eyre::eyre;
 use futures::{StreamExt, TryStreamExt};
-use metrics::{EmitMetric, Record, StorageEngine};
-use mongodb::{bson, event::cmap::ConnectionCheckoutFailedReason, Client};
-use opentelemetry::{InstrumentationLibrary, KeyValue, Value};
-use opentelemetry_sdk::metrics::data::{Metric, ResourceMetrics, ScopeMetrics};
-use opentelemetry_sdk::Resource;
-use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
-use std::error::Error;
-use std::time::{Instant, SystemTime};
+use mongodb::{bson, Client};
+use opentelemetry_sdk::metrics::data::ResourceMetrics;
+use otel_collector_component::ext::NumDatapoints;
+use std::time::SystemTime;
 use tracing::{debug, info, trace, warn};
-
-pub const DEFAULT_PORT: u16 = 27017;
-
-pub struct ResourceAttributesConfig {
-    database: Option<String>,
-    server_address: String,
-    server_port: u16,
-}
-
-// TODO: use From<> ?
-impl ResourceAttributesConfig {
-    pub fn into_resource(self) -> Resource {
-        let mut attributes = [
-            Some(KeyValue::new("server.address", self.server_address)),
-            Some(KeyValue::new(
-                "server.port",
-                Value::I64(self.server_port.into()),
-            )),
-            self.database.map(|db| KeyValue::new("database", db)),
-        ];
-        Resource::new(attributes.into_iter().filter_map(|attr| attr))
-    }
-}
 
 fn omit_values(mut value: bson::Bson, depth: usize) -> bson::Bson {
     omit_values_visitor(&mut value, depth);
@@ -88,66 +59,12 @@ pub fn get_server_address_and_port<'a>(
 ) -> eyre::Result<(&'a str, u16)> {
     let host = crate::get_str!(server_status, "host")?;
     match &*host.split(":").collect::<Vec<_>>() {
-        [host] => Ok((host, DEFAULT_PORT)),
+        [host] => Ok((host, crate::DEFAULT_PORT)),
         [host, port] => {
             let port = port.parse()?;
             Ok((host, port))
         }
         _ => Err(eyre::eyre!("unexpected host format: {:?}", host)),
-    }
-}
-
-#[derive(Debug)]
-pub struct Metrics {
-    database_count: metrics::DatabaseCount,
-    operation_time: metrics::OperationTime,
-    index_accesses: metrics::IndexAccesses,
-    server_status_metrics: Vec<Box<dyn metrics::Record>>,
-    db_stats_metrics: Vec<Box<dyn metrics::Record>>,
-    db_server_status_metrics: Vec<Box<dyn metrics::Record>>,
-}
-
-impl Default for Metrics {
-    fn default() -> Self {
-        Self {
-            database_count: metrics::DatabaseCount::default(),
-            operation_time: metrics::OperationTime::default(),
-            index_accesses: metrics::IndexAccesses::default(),
-            server_status_metrics: vec![
-                Box::new(metrics::CacheOperations::default()),
-                Box::new(metrics::CursorCount::default()),
-                Box::new(metrics::CursorTimeouts::default()),
-                Box::new(metrics::GlobalLockTime::default()),
-                Box::new(metrics::NetworkIn::default()),
-                Box::new(metrics::NetworkOut::default()),
-                Box::new(metrics::NetworkRequestCount::default()),
-                Box::new(metrics::OperationCount::default()),
-                Box::new(metrics::OperationReplCount::default()),
-                Box::new(metrics::SessionCount::default()),
-                Box::new(metrics::OperationLatencyTime::default()),
-                Box::new(metrics::OperationLatencyOps::default()),
-                Box::new(metrics::Uptime::default()),
-                Box::new(metrics::Health::default()),
-            ],
-            db_stats_metrics: vec![
-                Box::new(metrics::CollectionCount::default()),
-                Box::new(metrics::DataSize::default()),
-                Box::new(metrics::Extent::default()),
-                Box::new(metrics::IndexSize::default()),
-                Box::new(metrics::IndexCount::default()),
-                Box::new(metrics::ObjectCount::default()),
-                Box::new(metrics::StorageSize::default()),
-            ],
-            db_server_status_metrics: vec![
-                Box::new(metrics::ConnectionCount::default()),
-                Box::new(metrics::DocumentOperations::default()),
-                Box::new(metrics::MemoryUsage::default()),
-                Box::new(metrics::LockAquireCount::default()),
-                Box::new(metrics::LockAquireWaitCount::default()),
-                Box::new(metrics::LockAquireTime::default()),
-                Box::new(metrics::LockAquireDeadlockCount::default()),
-            ],
-        }
     }
 }
 
@@ -224,19 +141,15 @@ pub struct MetricScraper {
     start_time: SystemTime,
 }
 
-impl Scrape for MetricScraper {
-    async fn scrape(&mut self) -> eyre::Result<Vec<ResourceMetrics>> {
-        // async fn scrape(&mut self) -> () {
+impl MetricScraper {
+    pub async fn scrape(&mut self) -> eyre::Result<Vec<ResourceMetrics>> {
         let start = std::time::Instant::now();
         let mut errors = Vec::new();
         let metrics = self.record_metrics(&mut errors).await?;
-        // todo: do something with the errors
-        debug!("completed in {:?}", start.elapsed());
+        tracing::debug!("completed in {:?}", start.elapsed());
         Ok(metrics)
     }
-}
 
-impl MetricScraper {
     pub async fn new(options: &Options) -> eyre::Result<Self> {
         // connect to database
         let client = Client::with_uri_str(&options.connection_uri).await?;
@@ -247,7 +160,7 @@ impl MetricScraper {
             .run_command(bson::doc! { "ping": 1 })
             .await?;
 
-        info!(uri = options.connection_uri, "connected to database");
+        tracing::info!(uri = options.connection_uri, "connected to database");
 
         Ok(Self {
             client,
@@ -258,7 +171,7 @@ impl MetricScraper {
 
     pub async fn record_metrics(
         &mut self,
-        errors: &mut Vec<metrics::Error>,
+        errors: &mut Vec<crate::metrics::Error>,
     ) -> eyre::Result<Vec<ResourceMetrics>> {
         let now = SystemTime::now();
 
@@ -274,7 +187,7 @@ impl MetricScraper {
 
         let (server_address, server_port) = get_server_address_and_port(&server_status)?;
 
-        let mut config = metrics::Config {
+        let mut config = crate::metrics::Config {
             start_time: self.start_time,
             time: now,
             database_name: None,
@@ -293,14 +206,14 @@ impl MetricScraper {
             .record(&top_stats, &config, errors);
 
         // create resource
-        let global_resource = ResourceAttributesConfig {
+        let global_resource = crate::ResourceAttributesConfig {
             server_address: server_address.to_string(),
             server_port,
             database: None,
         }
         .into_resource();
 
-        let mut global_metrics = ScopeMetrics {
+        let mut global_metrics = crate::ScopeMetrics {
             scope: crate::LIBRARY.clone(),
             metrics: vec![],
         };
@@ -380,7 +293,7 @@ impl MetricScraper {
                 }
             }
 
-            let db_resource = ResourceAttributesConfig {
+            let db_resource = crate::ResourceAttributesConfig {
                 server_address: server_address.to_string(),
                 server_port,
                 database: Some(database_name.to_string()),
@@ -388,7 +301,7 @@ impl MetricScraper {
             .into_resource();
 
             // let metrics = self.metrics.emit_for_resource(resource);
-            let mut db_metrics = ScopeMetrics {
+            let mut db_metrics = crate::ScopeMetrics {
                 scope: crate::LIBRARY.clone(),
                 metrics: vec![],
             };

@@ -1,57 +1,13 @@
-[package]
-name = "mongodb-opentelemetry-receiver"
-version = "0.1.0"
-edition = "2021"
-
-[[bin]]
-name = "mongodb-opentelemetry-receiver"
-path = "src/main.rs"
+[workspace]
+members = [
+    "bin/*",
+    "crates/component",
+    "crates/receivers/*",
+    "crates/processors/*",
+    "crates/exporters/*",
+]
+resolver = "2"
 
 [profile.release]
 lto = true
 codegen-units = 1
-
-[dependencies]
-# parse configs
-serde = "1"
-serde_yaml = "0"
-duration-string = { version = "0", features = ["serde"] }
-regex = "1"
-
-# pipeline setup
-petgraph = "0"
-
-# mongodb receiver related
-semver = "1"
-mongodb = { version = "3" }
-
-# otlp receive and export
-opentelemetry = "0"
-opentelemetry-otlp = { version = "0", features = ["grpc-tonic", "gzip-tonic", "trace", "metrics", "logs", "tls" ] }
-opentelemetry_sdk = "0"
-tonic = "0"
-
-# utils
-lazy_static = "1"
-thiserror = "1"
-strum = { version = "0", features = ["derive"] }
-
-# async stuff
-async-trait = "0"
-futures = "0.3"
-
-# prometheus exporter (TODO)
-prometheus = "0"
-
-# opentelemetry-stdout = { version = "0", features = ["trace"] }
-
-# telemetry for the receiver itself
-tracing = "0"
-tracing-opentelemetry = "0"
-tracing-subscriber = { version = "0", features = ["json", "env-filter"] }
-
-# binary only
-color-eyre = "0"
-clap = { version = "4", features = ["derive"] }
-tokio = { version = "1", features = ["full"] }
-tokio-stream = { version = "0", features = ["sync", "time"] }

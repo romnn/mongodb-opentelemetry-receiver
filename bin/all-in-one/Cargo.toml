@@ -1,0 +1,49 @@
+[package]
+name = "otel-collector"
+version = "0.1.0"
+edition = "2021"
+publish = true
+authors = ["romnn <contact@romnn.com>"]
+description = "Opentelemetry (OTEL) collector"
+license-file = "../../LICENSE"
+readme = "./README.md"
+documentation = "https://docs.rs/nvbit-rs"
+homepage = "https://github.com/romnn/nvbit-rs"
+repository = "https://github.com/romnn/nvbit-rs"
+categories = [
+	"api-bindings",
+	"asynchronous",
+	"development-tools::profiling",
+	"development-tools::debugging",
+]
+keywords = [
+	"otel-collector",
+	"opentelemetry",
+	"telemetry",
+]
+exclude = []
+
+[features]
+default = ["full"]
+full = ["mongodb"]
+mongodb = ["otel-mongodb-receiver"]
+
+[dependencies]
+color-eyre = "0"
+clap = { version = "4", features = ["derive"] }
+tokio = { version = "1", features = ["full"] }
+tokio-stream = { version = "0", features = ["sync", "time"] }
+
+# tracing
+tracing = "0"
+tracing-opentelemetry = "0"
+tracing-subscriber = { version = "0", features = ["json", "env-filter"] }
+
+opentelemetry = "0"
+opentelemetry_sdk = "0"
+
+otel-collector-component = { path = "../../crates/component" }
+
+# optional
+otel-mongodb-receiver = { path = "../../crates/receivers/mongodb", optional = true }
+otel-otlp-exporter = { path = "../../crates/exporters/otlp", optional = true }

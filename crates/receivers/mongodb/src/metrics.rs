@@ -1,4 +1,4 @@
-use crate::{attributes, doc};
+use crate::{attributes, document};
 use color_eyre::eyre;
 use mongodb::bson;
 use opentelemetry::KeyValue;
@@ -42,11 +42,11 @@ pub struct Error {
     metric: &'static str,
     db: Option<String>,
     #[source]
-    source: doc::Error,
+    source: document::Error,
 }
 
 impl Error {
-    pub fn new(metric: &'static str, config: &Config, err: doc::Error) -> Self {
+    pub fn new(metric: &'static str, config: &Config, err: document::Error) -> Self {
         Self {
             metric,
             db: config.database_name.clone(),
@@ -56,7 +56,7 @@ impl Error {
 }
 
 impl Error {
-    pub fn partial_match(&self) -> Option<&doc::Match> {
+    pub fn partial_match(&self) -> Option<&document::Match> {
         self.source.source.partial_match()
     }
 }
@@ -889,8 +889,8 @@ fn record_lock_metric(
                     });
                 }
 
-                Err(doc::Error {
-                    source: doc::QueryError::NotFound { .. },
+                Err(document::Error {
+                    source: document::QueryError::NotFound { .. },
                     ..
                 }) => {
                     // mongoDB only publishes this lock metric is it is available.
@@ -1411,12 +1411,12 @@ impl Default for OperationTime {
     }
 }
 
-fn collection_path_names(stats: &bson::Bson) -> Result<Vec<&str>, doc::Error> {
-    let path = [doc::BsonKey::KeyStr("totals")];
-    let totals = doc::get_path(stats, path)?;
-    let totals = totals.as_document().ok_or_else(|| doc::Error {
-        path: doc::OwnedPath::from_iter(path.iter()),
-        source: doc::QueryError::InvalidType(doc::InvalidTypeError {
+fn collection_path_names(stats: &bson::Bson) -> Result<Vec<&str>, document::Error> {
+    let path = [document::BsonKey::KeyStr("totals")];
+    let totals = document::get_path(stats, path)?;
+    let totals = totals.as_document().ok_or_else(|| document::Error {
+        path: document::OwnedPath::from_iter(path.iter()),
+        source: document::QueryError::InvalidType(document::InvalidTypeError {
             expected_type: "map".to_string(),
             value: totals.clone(),
         }),
@@ -1433,7 +1433,7 @@ fn collection_path_names(stats: &bson::Bson) -> Result<Vec<&str>, doc::Error> {
 fn aggregate_operation_time_values(
     stats: &bson::Bson,
     collection_path_names: &[&str],
-) -> Result<HashMap<Operation, i64>, doc::Error> {
+) -> Result<HashMap<Operation, i64>, document::Error> {
     let mut aggregated: HashMap<Operation, i64> = HashMap::new();
     for collection_path_name in collection_path_names {
         for operation in Operation::iter() {

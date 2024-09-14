@@ -1,10 +1,7 @@
 use clap::Parser;
 use color_eyre::eyre;
-use mongodb_opentelemetry_receiver as collector;
-// use mongodb_opentelemetry_receiver::{
-//     // scrape::ScrapeScheduler, MetricScraper, Options as MongoOptions,
-// };
-use opentelemetry::trace::TracerProvider as _;
+// use mongodb_opentelemetry_receiver as collector;
+use opentelemetry::trace::TracerProvider as TracerProviderTrait;
 use opentelemetry_sdk::trace::TracerProvider;
 use std::path::PathBuf;
 use tracing::{info, warn};
@@ -68,7 +65,7 @@ async fn main() -> eyre::Result<()> {
     color_eyre::install()?;
     setup_telemetry();
 
-    let (shutdown_tx, mut shutdown_rx) = tokio::sync::watch::channel(false);
+    let (shutdown_tx, shutdown_rx) = tokio::sync::watch::channel(false);
 
     tokio::spawn(async move {
         tokio::signal::ctrl_c().await.unwrap();
@@ -82,51 +79,43 @@ async fn main() -> eyre::Result<()> {
     // dbg!(&options);
 
     let config = if let Some(path) = options.config_path {
-        let config = collector::config::Config::from_file(path)?;
+        let config = otel_collector_component::config::Config::from_file(path)?;
         config
     } else {
-        collector::config::Config::default()
+        otel_collector_component::config::Config::default()
     };
 
     // dbg!(&config);
     // info!(?config);
 
     // use collector::pipeline::PipelineBuilder;
-    use collector::pipeline::{BuiltinServiceBuilder, Pipelines};
+    use otel_collector_component::pipeline::{BuiltinServiceBuilder, Pipelines};
     let pipelines = Pipelines::from_config::<BuiltinServiceBuilder>(config)?;
     // tracing::debug!(?pipelines);
     // dbg!(&pipelines);
     // let pipeline_manager = collector::pipeline::PipelineManager::new(pipelines)?;
-    let pipeline_executor = collector::pipeline::PipelineExecutor { pipelines };
+    let pipeline_executor = otel_collector_component::pipeline::PipelineExecutor { pipelines };
     pipeline_executor.start(shutdown_rx).await?;
 
-    return Ok(());
-
-    let options = collector::mongodb::Options {
-        connection_uri: options.connection_uri,
-    };
-
-    // let scraper_future = MetricScraper::new(&options).await?;
-    let scraper_future = collector::mongodb::MetricScraper::new(&options);
-    let scraper = tokio::select! {
-        scraper = scraper_future => scraper,
-        _ = shutdown_rx.changed() => return Ok(()),
-    };
-    // _ = tokio::signal::ctrl_c() => return Ok(()),
-    let scraper = scraper?;
-
-    let interval = std::time::Duration::from_secs(30);
-    let scheduler = collector::scrape::ScrapeScheduler::new(scraper, interval, shutdown_rx);
-    let scheduler = std::sync::Arc::new(scheduler);
-    // let scheduler_clone = scheduler.clone();
-
-    // tokio::spawn(async move {
-    //     tokio::signal::ctrl_c().await.unwrap();
-    //     // shutdown
-    //     scheduler_clone.stop().await;
-    // });
-
-    info!(?interval, "starting scraper");
-    scheduler.start().await;
+    // let options = collector::mongodb::Options {
+    //     connection_uri: options.connection_uri,
+    // };
+    //
+    // // let scraper_future = MetricScraper::new(&options).await?;
+    // let scraper_future = collector::mongodb::MetricScraper::new(&options);
+    // let scraper = tokio::select! {
+    //     scraper = scraper_future => scraper,
+    //     _ = shutdown_rx.changed() => return Ok(()),
+    // };
+    // // _ = tokio::signal::ctrl_c() => return Ok(()),
+    // let scraper = scraper?;
+    //
+    // let interval = std::time::Duration::from_secs(30);
+    // let scheduler = collector::scrape::ScrapeScheduler::new(scraper, interval, shutdown_rx);
+    // let scheduler = std::sync::Arc::new(scheduler);
+    // // let scheduler_clone = scheduler.clone();
+    //
+    // info!(?interval, "starting scraper");
+    // scheduler.start().await;
     Ok(())
 }
