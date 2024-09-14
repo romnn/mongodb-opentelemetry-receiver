@@ -4,18 +4,21 @@ pub mod bfs;
 pub mod config;
 pub mod ext;
 pub mod factory;
-// pub mod mongodb;
-// pub mod otlp;
 pub mod pipeline;
-// pub mod prometheus;
 pub mod telemetry;
 
 use color_eyre::eyre;
 use factory::ComponentName;
+use opentelemetry_sdk::metrics::data::ResourceMetrics;
+use std::sync::Arc;
 use tokio::sync::watch;
 use tokio_stream::wrappers::BroadcastStream;
 
-pub type MetricPayload = String;
+/// Metric payload that is sent between pipeline nodes.
+///
+/// `Arc` is used to make the payload `Clone`, which is required to broadcast the payload to
+/// multiple distinct nodes down the pipeline.
+pub type MetricPayload = Arc<Vec<ResourceMetrics>>;
 pub type TracesPayload = String;
 pub type LogPayload = String;
 

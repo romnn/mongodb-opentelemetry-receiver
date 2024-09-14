@@ -48,6 +48,7 @@ tokio-stream = { version = "0", features = ["sync", "time"] }
 # prometheus = "0"
 
 # extensions
+opentelemetry = "0"
 opentelemetry_sdk = "0"
 # opentelemetry-stdout = { version = "0", features = ["trace"] }
 

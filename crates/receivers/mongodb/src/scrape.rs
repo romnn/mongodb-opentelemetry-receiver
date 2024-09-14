@@ -324,10 +324,11 @@ impl MetricScraper {
                 .collect::<Vec<_>>();
             metric_names.sort();
 
-            debug!("{:?} emitted {} metrics", database_name, metric_names.len());
-            // for (idx, metric_name) in metric_names.iter().enumerate() {
-            //     debug!("[{}] = {}", idx, metric_name);
-            // }
+            debug!(
+                "{:?} database emitted {} metrics",
+                database_name,
+                metric_names.len()
+            );
 
             let db_resource_metrics = ResourceMetrics {
                 resource: db_resource,

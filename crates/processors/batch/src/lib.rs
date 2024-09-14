@@ -9,6 +9,7 @@ use otel_collector_component::factory::ComponentName;
 use otel_collector_component::{MetricPayload, MetricsStream};
 use tokio::sync::{broadcast, watch};
 use tokio_stream::wrappers::BroadcastStream;
+use tracing::{trace, warn};
 
 pub const DEFAULT_BUFFER_SIZE: usize = 1024;
 
@@ -65,15 +66,24 @@ impl otel_collector_component::Processor for BatchProcessor {
         shutdown_rx: watch::Receiver<bool>,
         mut metrics: MetricsStream,
     ) -> eyre::Result<()> {
-        while let Some((from, metric)) = metrics.next().await {
-            tracing::debug!("{} received metric {:?} from {:?}", self.id, metric, from);
-            let metric = match metric {
-                Ok(metric) => metric,
+        while let Some((from, resource_metrics)) = metrics.next().await {
+            let resource_metrics = match resource_metrics {
+                Ok(resource_metrics) => resource_metrics,
                 Err(err) => {
+                    warn!(
+                        "{} received metric error {:?} from {:?}",
+                        self.id, err, from
+                    );
                     continue;
                 }
             };
-            if let Err(err) = self.metrics_tx.send(metric) {
+            trace!(
+                "{} received {} metrics from {:?}",
+                self.id,
+                resource_metrics.len(),
+                from
+            );
+            if let Err(err) = self.metrics_tx.send(resource_metrics) {
                 tracing::error!("{} failed to send: {err}", self.to_service_id());
             }
         }

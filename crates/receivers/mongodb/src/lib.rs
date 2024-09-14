@@ -38,63 +38,6 @@ lazy_static::lazy_static! {
     // )
 }
 
-// pub trait Scrape {
-//     async fn scrape(&mut self) -> eyre::Result<Vec<ResourceMetrics>>;
-//     // async fn scrape(&mut self) -> ();
-// }
-//
-// #[derive(Debug)]
-// pub struct ScrapeScheduler<S> {
-//     pub scraper: Arc<Mutex<S>>,
-//     pub interval: std::time::Duration,
-//     // pub consumers: Vec<Box<dyn MetricsConsumer>>,
-//     pub shutdown_rx: Receiver<bool>,
-// }
-//
-// impl<S> ScrapeScheduler<S> {
-//     pub fn new(scraper: S, interval: std::time::Duration, shutdown_rx: Receiver<bool>) -> Self {
-//         Self {
-//             scraper: Arc::new(Mutex::new(scraper)),
-//             interval,
-//             // consumers: Vec::new(),
-//             shutdown_rx,
-//         }
-//     }
-// }
-//
-// impl<S> ScrapeScheduler<S>
-// where
-//     S: Scrape,
-// {
-//     pub async fn start(&self) {
-//         let mut shutdown_rx_clone = self.shutdown_rx.clone();
-//         let mut interval = tokio::time::interval(self.interval);
-//         interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
-//
-//         let scrape = || async {
-//             // telemetry like in (sc *controller) scrapeMetricsAndReport() would be cool
-//             match self.scraper.lock().await.scrape().await {
-//                 Ok(metrics) => {
-//                     // consume
-//                     // for consumer in self.consumers.iter() {
-//                     //     // todo
-//                     // }
-//                 }
-//                 Err(err) => {
-//                     tracing::warn!("error scraping metrics: {}", err);
-//                 }
-//             };
-//         };
-//
-//         loop {
-//             tokio::select! {
-//                 _ = interval.tick() => scrape().await,
-//                 _ = shutdown_rx_clone.changed() => return,
-//             }
-//         }
-//     }
-// }
-
 pub struct ResourceAttributesConfig {
     database: Option<String>,
     server_address: String,
@@ -194,8 +137,6 @@ pub struct Receiver {
     pub config: config::MongoDbReceiverConfig,
     pub scraper: crate::scrape::MetricScraper,
     pub metrics_tx: broadcast::Sender<MetricPayload>,
-    // pub scrape_interval: std::time::Duration,
-    // pub metrics_rx: broadcast::Sender<MetricPayload>,
 }
 
 impl std::fmt::Debug for Receiver {
@@ -217,7 +158,6 @@ impl Receiver {
             .first()
             .map(|host| host.endpoint.to_string())
             .ok_or_else(|| eyre::eyre!("missing mongodb host"))?;
-        dbg!(&connection_uri);
         let options = crate::scrape::Options { connection_uri };
         let scraper = crate::scrape::MetricScraper::new(&options).await?;
         let (metrics_tx, _) = broadcast::channel(DEFAULT_BUFFER_SIZE);
@@ -255,34 +195,13 @@ impl otel_collector_component::Receiver for Receiver {
             match self.scraper.scrape().await {
                 Ok(metrics) => {
                     info!("mongodb scraped {} metrics", metrics.len());
+                    self.metrics_tx.send(Arc::new(metrics));
                 }
                 Err(err) => {
                     warn!("error scraping metrics: {}", err);
                 }
             };
         }
-
-        // let scrape = || async {
-        //     // telemetry like in (sc *controller) scrapeMetricsAndReport() would be cool
-        //     match self.scraper.lock().await.scrape().await {
-        //         Ok(metrics) => {
-        //             // consume
-        //             // for consumer in self.consumers.iter() {
-        //             //     // todo
-        //             // }
-        //         }
-        //         Err(err) => {
-        //             tracing::warn!("error scraping metrics: {}", err);
-        //         }
-        //     };
-        // };
-        //
-        // loop {
-        //     tokio::select! {
-        //         _ = interval.tick() => scrape().await,
-        //         _ = shutdown_rx.changed() => return,
-        //     }
-        // }
         Ok(())
     }
 }

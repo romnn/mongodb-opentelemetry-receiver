@@ -2,21 +2,15 @@ use crate::factory::{ExporterFactory, ProcessorFactory, ReceiverFactory};
 use crate::{config, MetricPayload, ServiceError, ServiceIdentifier, ServiceKind};
 use color_eyre::eyre;
 use futures::{Stream, StreamExt};
-// use petgraph::adj::NodeIndex;
-// use opentelemetry_sdk::{
-//     export::trace::SpanData,
-//     logs::LogData,
-//     metrics::{
-//         data::{ResourceMetrics, Temporality},
-//         exporter,
-//     },
-// };
+use opentelemetry_sdk::metrics::data::ResourceMetrics;
+use opentelemetry_sdk::Resource;
 use petgraph::data::{Build, DataMap};
 use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::watch;
 use tokio::{net::unix::pipe::pipe, sync::broadcast};
 use tokio_stream::wrappers::BroadcastStream;
+use tracing::debug;
 
 pub trait GraphExt<N, E, Ix> {
     fn get_or_insert_node(&mut self, weight: N) -> petgraph::graph::NodeIndex<Ix>
@@ -47,7 +41,7 @@ where
 }
 
 #[derive(Debug)]
-pub struct TimestampReceiver {
+pub struct MonotonicSequenceReceiver {
     pub id: String,
     pub metrics_tx: broadcast::Sender<MetricPayload>,
     pub interval: std::time::Duration,
@@ -55,8 +49,8 @@ pub struct TimestampReceiver {
 
 pub const DEFAULT_BUFFER_SIZE: usize = 1024;
 
-impl TimestampReceiver {
-    pub fn from_config(id: String, interval: std::time::Duration) -> Self {
+impl MonotonicSequenceReceiver {
+    pub fn new(id: String, interval: std::time::Duration) -> Self {
         let (metrics_tx, _) = broadcast::channel(DEFAULT_BUFFER_SIZE);
         Self {
             id,
@@ -67,7 +61,7 @@ impl TimestampReceiver {
 }
 
 #[async_trait::async_trait]
-impl crate::Receiver for TimestampReceiver {
+impl crate::Receiver for MonotonicSequenceReceiver {
     fn id(&self) -> &str {
         &self.id
     }
@@ -76,34 +70,33 @@ impl crate::Receiver for TimestampReceiver {
         let mut interval = tokio::time::interval(std::time::Duration::from_secs(1));
         interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
         let mut interval_stream = tokio_stream::wrappers::IntervalStream::new(interval);
+        let mut sequence_number = 0;
         loop {
-            let tick = tokio::select! {
-                tick = interval_stream.next() => tick,
+            tokio::select! {
+                _ = interval_stream.next() => (),
                 _ = shutdown_rx.changed() => break,
             };
 
-            // tokio::select! {
-            //     tick = interval_stream.next() => match tick {
-            match tick {
-                Some(instant) => {
-                    tracing::debug!(
-                        queue_size = self.metrics_tx.len(),
-                        num_receivers = self.metrics_tx.receiver_count(),
-                        "sending tick {instant:?}"
-                    );
-                    self.metrics_tx.send(format!("mock metric: {instant:?}"));
-                }
-                None => break,
-            }
-            //     },
-            //     _ = shutdown_rx.changed() => break,
-            // }
+            tracing::debug!(
+                queue_size = self.metrics_tx.len(),
+                num_receivers = self.metrics_tx.receiver_count(),
+                "sending sequence number {sequence_number}"
+            );
+            let metrics = opentelemetry_sdk::metrics::data::ResourceMetrics {
+                resource: opentelemetry_sdk::Resource::new(vec![opentelemetry::KeyValue::new(
+                    "sequence_number",
+                    sequence_number,
+                )]),
+                scope_metrics: vec![],
+            };
+            self.metrics_tx.send(Arc::new(vec![metrics]));
+            sequence_number += 1;
         }
         Ok(())
     }
 }
 
-impl crate::Producer for TimestampReceiver {
+impl crate::Producer for MonotonicSequenceReceiver {
     fn metrics(&self) -> BroadcastStream<MetricPayload> {
         BroadcastStream::new(self.metrics_tx.subscribe())
     }
@@ -177,59 +170,6 @@ impl Service {
     }
 }
 
-// pub struct BuiltinServiceBuilder {}
-//
-// #[async_trait::async_trait]
-// pub trait ServiceBuilder {
-//     fn build_service(
-//         unique_id: &ServiceIdentifier,
-//         // service: String,
-//         service: &str,
-//         raw_config: serde_yaml::Value,
-//     ) -> Result<Service, ServiceError> {
-//         match (unique_id.kind(), service) {
-//             (ServiceKind::Processor, "debug") => {
-//                 todo!()
-//             }
-//             // (ServiceKind::Exporter, "otlp") => {
-//             //     let otlp_exporter = OtlpExporter::from_config(unique_id.to_string(), raw_config)
-//             //         .map_err(|err| ServiceError::Service(err.into()))?;
-//             //     Ok(Service::Exporter(Box::new(otlp_exporter)))
-//             // }
-//             // (ServiceKind::Processor, "batch") => {
-//             //     let batch_processor =
-//             //         BatchProcessor::from_config(unique_id.to_string(), raw_config)
-//             //             .map_err(|err| ServiceError::Service(err.into()))?;
-//             //     Ok(Service::Processor(Box::new(batch_processor)))
-//             // }
-//             // (ServiceKind::Receiver, "mongodb") => {
-//             //     let mongodb_receiver =
-//             //         MongoDbReceiver::from_config(unique_id.to_string(), raw_config)
-//             //             .map_err(|err| ServiceError::Service(err.into()))?;
-//             //     Ok(Service::Receiver(Box::new(mongodb_receiver)))
-//             // }
-//             // (ServiceKind::Receiver, "otlp") => {
-//             //     let otlp_receiver = OtlpReceiver::from_config(unique_id.to_string(), raw_config)
-//             //         .map_err(|err| ServiceError::Service(err.into()))?;
-//             //     // dbg!(&otlp_receiver);
-//             //     Ok(Service::Receiver(Arc::new(otlp_receiver)))
-//             //     // all_receivers.push(Arc::new(otlp_receiver));
-//             // }
-//             (kind, service) => {
-//                 tracing::warn!("unknown {kind}: {service:?}");
-//                 Err(ServiceError::UnknownService {
-//                     kind,
-//                     id: unique_id.to_string(),
-//                 }
-//                 .into())
-//             }
-//         }
-//     }
-// }
-
-// #[async_trait::async_trait]
-// impl ServiceBuilder for BuiltinServiceBuilder {}
-
 #[derive(Debug, Copy, Clone, Hash, PartialEq, Eq, PartialOrd, Ord, strum::Display)]
 pub enum PipelineEdge {
     #[strum(serialize = "metrics")]
@@ -286,18 +226,11 @@ impl PipelineBuilder {
         self
     }
 
-    pub fn with_processors(
-        mut self,
-        factories: Vec<Box<dyn ProcessorFactory + 'static>>,
-        // factories: impl Iterator<Item = Box<dyn ProcessorFactory + 'static>>,
-        // factories: impl IntoIterator<Item = Box<dyn ProcessorFactory + 'static>>,
-        // factories: impl IntoIterator<Item = dyn ProcessorFactory + 'static>,
-    ) -> Self {
+    pub fn with_processors(mut self, factories: Vec<Box<dyn ProcessorFactory + 'static>>) -> Self {
         self.factories.extend(factories.into_iter().map(|factory| {
             (
                 ServiceIdentifier::Processor(factory.component_name().into()),
                 Factory::Processor(factory),
-                // Factory::Processor(Box::new(factory)),
             )
         }));
         self
@@ -343,7 +276,7 @@ impl PipelineBuilder {
 
         let services = build_services(&graph, &self.factories, config).await?;
 
-        // print_pipeline_paths(&graph);
+        print_pipeline_paths(&graph);
 
         Ok(Pipelines {
             services,
@@ -367,7 +300,6 @@ pub async fn build_services(
 ) -> eyre::Result<ServiceMap> {
     let mut services = HashMap::new();
     for node in graph.node_weights() {
-        dbg!(&node);
         let PipelineNode::Service(unique_service_id) = node else {
             continue;
         };
@@ -408,72 +340,9 @@ pub async fn build_services(
 
         assert_eq!(unique_service_id.kind(), service.kind());
         services.insert(unique_service_id.clone(), service);
-        // match (unique_id.kind(), service) {
-        //             (ServiceKind::Processor, "debug") => {
-        //                 todo!()
-        //             }
-        //             // (ServiceKind::Exporter, "otlp") => {
-        //             //     let otlp_exporter = OtlpExporter::from_config(unique_id.to_string(), raw_config)
-        //             //         .map_err(|err| ServiceError::Service(err.into()))?;
-        //             //     Ok(Service::Exporter(Box::new(otlp_exporter)))
-        //             // }
-        //             // (ServiceKind::Processor, "batch") => {
-        //             //     let batch_processor =
-        //             //         BatchProcessor::from_config(unique_id.to_string(), raw_config)
-        //             //             .map_err(|err| ServiceError::Service(err.into()))?;
-        //             //     Ok(Service::Processor(Box::new(batch_processor)))
-        //             // }
-        //             // (ServiceKind::Receiver, "mongodb") => {
-        //             //     let mongodb_receiver =
-        //             //         MongoDbReceiver::from_config(unique_id.to_string(), raw_config)
-        //             //             .map_err(|err| ServiceError::Service(err.into()))?;
-        //             //     Ok(Service::Receiver(Box::new(mongodb_receiver)))
-        //             // }
     }
-    tracing::info!("done building services");
     Ok(services)
 }
-
-// for unique_service_id in pipeline_receivers
-//     .chain(pipeline_processors)
-//     .chain(pipeline_exporters)
-// {
-//     if services.contains_key(&unique_service_id) {
-//         continue;
-//     }
-//     let unique_id = unique_service_id.id();
-//     let service =
-//         crate::service_id(&unique_id).ok_or_else(|| ServiceError::InvalidFormat {
-//             kind: unique_service_id.kind(),
-//             id: unique_id.to_string(),
-//         })?;
-//     let raw_config = match &unique_service_id {
-//         ServiceIdentifier::Receiver(receiver_id) => {
-//             config.receivers.receivers.remove(receiver_id)
-//         }
-//         ServiceIdentifier::Processor(processor_id) => {
-//             config.processors.processors.remove(processor_id)
-//         }
-//         ServiceIdentifier::Exporter(exporter_id) => {
-//             config.exporters.exporters.remove(exporter_id)
-//         }
-//     };
-//     let raw_config = raw_config.ok_or_else(|| ServiceError::MissingService {
-//         kind: unique_service_id.kind(),
-//         id: unique_id.to_string(),
-//     })?;
-//
-//     // build the service
-//     match B::build_service(&unique_service_id, &service, raw_config) {
-//         Ok(service) => {
-//             services.insert(unique_service_id, service);
-//         }
-//         Err(err) => {
-//             tracing::error!("failed to build {unique_service_id}: {err}");
-//         }
-//     }
-// }
-// }
 
 pub fn build_pipeline_graph(
     config: &config::Config,
@@ -581,55 +450,36 @@ pub fn build_pipeline_graph(
     Ok((graph, source_node))
 }
 
-// impl Pipelines {
-//     pub fn from_config(mut config: config::Config) -> eyre::Result<Self> {
-//
-//     }
-// }
-
 fn print_pipeline_paths(graph: &PipelineGraph) {
-    tracing::debug!("=== PIPELINES:");
     let mut sources = graph.externals(petgraph::Direction::Incoming);
     let mut sinks = graph.externals(petgraph::Direction::Outgoing);
-    dbg!(sources.clone().collect::<Vec<_>>());
-    dbg!(sinks.clone().collect::<Vec<_>>());
+    debug!(
+        "sources: {:?}",
+        sources
+            .clone()
+            .filter_map(|node_idx| graph.node_weight(node_idx))
+            .map(|node| node.to_string())
+            .collect::<Vec<_>>()
+    );
+    debug!(
+        "sinks: {:?}",
+        sinks
+            .clone()
+            .filter_map(|node_idx| graph.node_weight(node_idx))
+            .map(|node| node.to_string())
+            .collect::<Vec<_>>()
+    );
     let source = sources.next().unwrap();
     assert_eq!(sources.next(), None);
     let sink = sinks.next().unwrap();
     assert_eq!(sinks.next(), None);
 
-    dbg!(&graph);
-
-    // let start_end = [(source, sink)];
-    let ways: Vec<Vec<_>> =
+    let paths: Vec<Vec<_>> =
         petgraph::algo::all_simple_paths(&graph, source, sink, 0, None).collect();
-    // .map(|path| );
 
-    // dbg!(start_end);
-    // let ways: Vec<Vec<&PipelineNode>> = start_end
-    //     .iter()
-    //     .flat_map(|(receiver_node, exporter_node)| {
-    //         petgraph::algo::all_simple_paths::<Vec<_>, _>(
-    //             &graph,
-    //             *receiver_node,
-    //             *exporter_node,
-    //             0,
-    //             None,
-    //         )
-    //     })
-    //     .map(|path| {
-    //         path.into_iter()
-    //             .map(|idx| graph.node_weight(idx).unwrap())
-    //             .collect()
-    //     })
-    //     .collect();
-
-    let unique_ways = std::collections::HashSet::<Vec<petgraph::graph::NodeIndex>>::from_iter(ways);
-    // let unique_ways = std::collections::HashSet::<Vec<&PipelineNode>>::from_iter(ways);
-
-    for path in unique_ways {
-        tracing::debug!(
-            "{}",
+    for path in paths {
+        debug!(
+            "pipeline: {}",
             path.into_iter()
                 .map(|node_idx| graph.node_weight(node_idx).unwrap().to_string())
                 .collect::<Vec<_>>()

@@ -1412,6 +1412,7 @@ dependencies = [
  "color-eyre",
  "futures",
  "lazy_static",
+ "opentelemetry",
  "opentelemetry_sdk",
  "petgraph",
  "regex",

@@ -10,6 +10,7 @@ use opentelemetry_sdk::{export::trace::SpanData, logs::LogData, metrics::exporte
 use otel_collector_component::factory::ComponentName;
 use otel_collector_component::MetricsStream;
 use tokio::sync::{broadcast, watch};
+use tracing::{debug, trace, warn};
 
 lazy_static::lazy_static! {
     static ref COMPONENT_NAME: ComponentName = ComponentName::new("otlp").unwrap();
@@ -180,8 +181,24 @@ impl otel_collector_component::Exporter for OtlpExporter {
         mut metrics: MetricsStream,
     ) -> eyre::Result<()> {
         tracing::debug!("{} is running", self.id);
-        while let Some(metric) = metrics.next().await {
-            tracing::debug!("{} received metric {:?}", self.id, metric);
+        while let Some((from, resource_metrics)) = metrics.next().await {
+            let resource_metrics = match resource_metrics {
+                Ok(resource_metrics) => resource_metrics,
+                Err(err) => {
+                    warn!(
+                        "{} received metric error {:?} from {:?}",
+                        self.id, err, from
+                    );
+                    continue;
+                }
+            };
+            trace!(
+                "{} received {} metrics from {:?}",
+                self.id,
+                resource_metrics.len(),
+                from
+            );
+            // TODO: send the metrics here
         }
         Ok(())
     }
