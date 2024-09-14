@@ -1,8 +1,11 @@
+#![allow(warnings)]
+
 use clap::Parser;
 use color_eyre::eyre;
 // use mongodb_opentelemetry_receiver as collector;
 use opentelemetry::trace::TracerProvider as TracerProviderTrait;
 use opentelemetry_sdk::trace::TracerProvider;
+use otel_collector_component::{factory::ProcessorFactory, pipeline::PipelineBuilder};
 use std::path::PathBuf;
 use tracing::{info, warn};
 use tracing_subscriber::layer::SubscriberExt;
@@ -11,10 +14,10 @@ use tracing_subscriber::layer::SubscriberExt;
 #[command(author, version, about, long_about = None)]
 #[command(propagate_version = true)]
 pub struct Options {
-    #[arg(long = "uri", help = "MongoDB connection URI")]
-    pub connection_uri: String,
-    #[arg(long = "interval", help = "Scrape interval")]
-    pub interval_secs: Option<usize>,
+    // #[arg(long = "uri", help = "MongoDB connection URI")]
+    // pub connection_uri: String,
+    // #[arg(long = "interval", help = "Scrape interval")]
+    // pub interval_secs: Option<usize>,
     #[arg(short = 'c', long = "config", aliases = ["conf"],  help = "Path to YAML config file")]
     pub config_path: Option<PathBuf>,
 }
@@ -89,9 +92,19 @@ async fn main() -> eyre::Result<()> {
     // info!(?config);
 
     // use collector::pipeline::PipelineBuilder;
-    use otel_collector_component::pipeline::{BuiltinServiceBuilder, Pipelines};
-    let pipelines = Pipelines::from_config::<BuiltinServiceBuilder>(config)?;
+    // use otel_collector_component::pipeline::{BuiltinServiceBuilder, Pipelines};
+    let pipelines = PipelineBuilder::new()
+        .with_receiver(otel_mongodb_receiver::Factory::default())
+        .with_processors(vec![
+            Box::new(otel_batch_processor::Factory::default()), // Box::new(otel_batch_processor::Factory::default()) as Box<dyn ProcessorFactory>
+        ])
+        .with_exporter(otel_otlp_exporter::Factory::default())
+        .build(config)
+        .await?;
+
+    // let pipelines = Pipelines::from_config::<BuiltinServiceBuilder>(config)?;
     // tracing::debug!(?pipelines);
+    tracing::debug!("done building pipelines");
     // dbg!(&pipelines);
     // let pipeline_manager = collector::pipeline::PipelineManager::new(pipelines)?;
     let pipeline_executor = otel_collector_component::pipeline::PipelineExecutor { pipelines };

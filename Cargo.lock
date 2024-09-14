@@ -1393,6 +1393,7 @@ dependencies = [
  "color-eyre",
  "opentelemetry",
  "opentelemetry_sdk",
+ "otel-batch-processor",
  "otel-collector-component",
  "otel-mongodb-receiver",
  "otel-otlp-exporter",

@@ -1,6 +1,6 @@
 use crate::metrics::{EmitMetric, Record, StorageEngine};
 use crate::Metrics;
-use color_eyre::eyre;
+use color_eyre::eyre::{self, WrapErr};
 use futures::{StreamExt, TryStreamExt};
 use mongodb::{bson, Client};
 use opentelemetry_sdk::metrics::data::ResourceMetrics;
@@ -152,7 +152,9 @@ impl MetricScraper {
 
     pub async fn new(options: &Options) -> eyre::Result<Self> {
         // connect to database
-        let client = Client::with_uri_str(&options.connection_uri).await?;
+        let client = Client::with_uri_str(&options.connection_uri)
+            .await
+            .wrap_err_with(|| eyre::eyre!("invalid connection uri {:?}", options.connection_uri))?;
 
         // send ping to confirm a successful connection
         client

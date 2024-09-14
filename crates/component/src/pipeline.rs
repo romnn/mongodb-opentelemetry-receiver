@@ -1,6 +1,8 @@
+use crate::factory::{ExporterFactory, ProcessorFactory, ReceiverFactory};
 use crate::{config, MetricPayload, ServiceError, ServiceIdentifier, ServiceKind};
 use color_eyre::eyre;
 use futures::{Stream, StreamExt};
+// use petgraph::adj::NodeIndex;
 // use opentelemetry_sdk::{
 //     export::trace::SpanData,
 //     logs::LogData,
@@ -150,67 +152,83 @@ impl Service {
         }
     }
 
-    pub fn service_id(&self) -> ServiceIdentifier {
+    pub fn kind(&self) -> ServiceKind {
         match self {
-            Self::Receiver(receiver) => receiver.service_id(),
-            Self::Processor(processor) => processor.service_id(),
-            Self::Exporter(exporter) => exporter.service_id(),
+            Self::Receiver(_) => ServiceKind::Receiver,
+            Self::Processor(_) => ServiceKind::Processor,
+            Self::Exporter(_) => ServiceKind::Exporter,
+        }
+    }
+
+    pub fn to_service_id(&self) -> ServiceIdentifier {
+        match self {
+            Self::Receiver(receiver) => receiver.to_service_id(),
+            Self::Processor(processor) => processor.to_service_id(),
+            Self::Exporter(exporter) => exporter.to_service_id(),
+        }
+    }
+
+    pub fn id(&self) -> &str {
+        match self {
+            Self::Receiver(receiver) => receiver.id(),
+            Self::Processor(processor) => processor.id(),
+            Self::Exporter(exporter) => exporter.id(),
         }
     }
 }
 
-pub struct BuiltinServiceBuilder {}
+// pub struct BuiltinServiceBuilder {}
+//
+// #[async_trait::async_trait]
+// pub trait ServiceBuilder {
+//     fn build_service(
+//         unique_id: &ServiceIdentifier,
+//         // service: String,
+//         service: &str,
+//         raw_config: serde_yaml::Value,
+//     ) -> Result<Service, ServiceError> {
+//         match (unique_id.kind(), service) {
+//             (ServiceKind::Processor, "debug") => {
+//                 todo!()
+//             }
+//             // (ServiceKind::Exporter, "otlp") => {
+//             //     let otlp_exporter = OtlpExporter::from_config(unique_id.to_string(), raw_config)
+//             //         .map_err(|err| ServiceError::Service(err.into()))?;
+//             //     Ok(Service::Exporter(Box::new(otlp_exporter)))
+//             // }
+//             // (ServiceKind::Processor, "batch") => {
+//             //     let batch_processor =
+//             //         BatchProcessor::from_config(unique_id.to_string(), raw_config)
+//             //             .map_err(|err| ServiceError::Service(err.into()))?;
+//             //     Ok(Service::Processor(Box::new(batch_processor)))
+//             // }
+//             // (ServiceKind::Receiver, "mongodb") => {
+//             //     let mongodb_receiver =
+//             //         MongoDbReceiver::from_config(unique_id.to_string(), raw_config)
+//             //             .map_err(|err| ServiceError::Service(err.into()))?;
+//             //     Ok(Service::Receiver(Box::new(mongodb_receiver)))
+//             // }
+//             // (ServiceKind::Receiver, "otlp") => {
+//             //     let otlp_receiver = OtlpReceiver::from_config(unique_id.to_string(), raw_config)
+//             //         .map_err(|err| ServiceError::Service(err.into()))?;
+//             //     // dbg!(&otlp_receiver);
+//             //     Ok(Service::Receiver(Arc::new(otlp_receiver)))
+//             //     // all_receivers.push(Arc::new(otlp_receiver));
+//             // }
+//             (kind, service) => {
+//                 tracing::warn!("unknown {kind}: {service:?}");
+//                 Err(ServiceError::UnknownService {
+//                     kind,
+//                     id: unique_id.to_string(),
+//                 }
+//                 .into())
+//             }
+//         }
+//     }
+// }
 
-#[async_trait::async_trait]
-pub trait ServiceBuilder {
-    fn build_service(
-        unique_id: &ServiceIdentifier,
-        // service: String,
-        service: &str,
-        raw_config: serde_yaml::Value,
-    ) -> Result<Service, ServiceError> {
-        match (unique_id.kind(), service) {
-            (ServiceKind::Processor, "debug") => {
-                todo!()
-            }
-            // (ServiceKind::Exporter, "otlp") => {
-            //     let otlp_exporter = OtlpExporter::from_config(unique_id.to_string(), raw_config)
-            //         .map_err(|err| ServiceError::Service(err.into()))?;
-            //     Ok(Service::Exporter(Box::new(otlp_exporter)))
-            // }
-            // (ServiceKind::Processor, "batch") => {
-            //     let batch_processor =
-            //         BatchProcessor::from_config(unique_id.to_string(), raw_config)
-            //             .map_err(|err| ServiceError::Service(err.into()))?;
-            //     Ok(Service::Processor(Box::new(batch_processor)))
-            // }
-            // (ServiceKind::Receiver, "mongodb") => {
-            //     let mongodb_receiver =
-            //         MongoDbReceiver::from_config(unique_id.to_string(), raw_config)
-            //             .map_err(|err| ServiceError::Service(err.into()))?;
-            //     Ok(Service::Receiver(Box::new(mongodb_receiver)))
-            // }
-            // (ServiceKind::Receiver, "otlp") => {
-            //     let otlp_receiver = OtlpReceiver::from_config(unique_id.to_string(), raw_config)
-            //         .map_err(|err| ServiceError::Service(err.into()))?;
-            //     // dbg!(&otlp_receiver);
-            //     Ok(Service::Receiver(Arc::new(otlp_receiver)))
-            //     // all_receivers.push(Arc::new(otlp_receiver));
-            // }
-            (kind, service) => {
-                tracing::warn!("unknown {kind}: {service:?}");
-                Err(ServiceError::UnknownService {
-                    kind,
-                    id: unique_id.to_string(),
-                }
-                .into())
-            }
-        }
-    }
-}
-
-#[async_trait::async_trait]
-impl ServiceBuilder for BuiltinServiceBuilder {}
+// #[async_trait::async_trait]
+// impl ServiceBuilder for BuiltinServiceBuilder {}
 
 #[derive(Debug, Copy, Clone, Hash, PartialEq, Eq, PartialOrd, Ord, strum::Display)]
 pub enum PipelineEdge {
@@ -241,219 +259,379 @@ impl std::fmt::Display for PipelineNode {
 
 pub type PipelineGraph = petgraph::graph::DiGraph<PipelineNode, PipelineEdge>;
 
-#[derive(Debug)]
-pub struct Pipelines {
-    pub services: HashMap<ServiceIdentifier, Service>,
-    pub pipelines: PipelineGraph,
+pub enum Factory {
+    Receiver(Box<dyn ReceiverFactory>),
+    Processor(Box<dyn ProcessorFactory>),
+    Exporter(Box<dyn ExporterFactory>),
 }
 
-impl Pipelines {
-    pub fn from_config<B>(mut config: config::Config) -> eyre::Result<Self>
-    where
-        B: ServiceBuilder,
-    {
-        let mut services = HashMap::new();
+pub type FactoryMap = HashMap<ServiceIdentifier, Factory>;
 
-        let mut graph = PipelineGraph::default();
+pub struct PipelineBuilder {
+    pub factories: FactoryMap,
+}
 
-        let source_node = graph.add_node(PipelineNode::Source);
-        let sink_node = graph.add_node(PipelineNode::Sink);
+impl PipelineBuilder {
+    pub fn new() -> Self {
+        Self {
+            factories: FactoryMap::new(),
+        }
+    }
 
-        for (pipeline_id, pipeline) in config.service.pipelines.pipelines {
-            let edge = match crate::service_id(&pipeline_id).as_deref() {
-                Some("metrics") => PipelineEdge::Metrics,
-                Some("logs") => PipelineEdge::Logs,
-                Some("traces") => PipelineEdge::Traces,
-                Some(other) => {
-                    tracing::warn!("skipping pipeline {pipeline_id:?} of unknown type {other:?}");
-                    continue;
-                }
-                None => {
-                    tracing::warn!("skipping pipeline {pipeline_id:?} with invalid format");
-                    continue;
-                }
-            };
+    pub fn with_receiver(mut self, factory: impl ReceiverFactory + 'static) -> Self {
+        self.factories.insert(
+            ServiceIdentifier::Receiver(factory.component_name().into()),
+            Factory::Receiver(Box::new(factory)),
+        );
+        self
+    }
 
-            let receiver_nodes = pipeline
-                .receivers
-                .iter()
-                .map(|receiver_id| {
-                    graph.get_or_insert_node(PipelineNode::Service(ServiceIdentifier::Receiver(
-                        receiver_id.to_string(),
-                    )))
-                })
-                .collect::<Vec<_>>();
+    pub fn with_processors(
+        mut self,
+        factories: Vec<Box<dyn ProcessorFactory + 'static>>,
+        // factories: impl Iterator<Item = Box<dyn ProcessorFactory + 'static>>,
+        // factories: impl IntoIterator<Item = Box<dyn ProcessorFactory + 'static>>,
+        // factories: impl IntoIterator<Item = dyn ProcessorFactory + 'static>,
+    ) -> Self {
+        self.factories.extend(factories.into_iter().map(|factory| {
+            (
+                ServiceIdentifier::Processor(factory.component_name().into()),
+                Factory::Processor(factory),
+                // Factory::Processor(Box::new(factory)),
+            )
+        }));
+        self
+    }
 
-            if receiver_nodes.is_empty() {
-                tracing::warn!("skipping pipeline {pipeline_id:?} without receivers");
-                continue;
-            };
+    pub fn with_processor(mut self, factory: impl ProcessorFactory + 'static) -> Self {
+        self.factories.insert(
+            ServiceIdentifier::Processor(factory.component_name().into()),
+            Factory::Processor(Box::new(factory)),
+        );
+        self
+    }
 
-            let processor_nodes = pipeline
-                .processors
-                .iter()
-                .map(|processor_id| {
-                    graph.get_or_insert_node(PipelineNode::Service(ServiceIdentifier::Processor(
-                        processor_id.to_string(),
-                    )))
-                })
-                .collect::<Vec<_>>();
+    pub fn with_exporters(
+        mut self,
+        factories: impl IntoIterator<Item = Box<dyn ExporterFactory>>,
+    ) -> Self {
+        self.factories.extend(factories.into_iter().map(|factory| {
+            (
+                ServiceIdentifier::Exporter(factory.component_name().into()),
+                Factory::Exporter(factory),
+            )
+        }));
+        self
+    }
 
-            let exporter_nodes = pipeline
-                .exporters
-                .iter()
-                .map(|exporter_id| {
-                    graph.get_or_insert_node(PipelineNode::Service(ServiceIdentifier::Exporter(
-                        exporter_id.to_string(),
-                    )))
-                })
-                .collect::<Vec<_>>();
+    pub fn with_exporter(mut self, factory: impl ExporterFactory + 'static) -> Self {
+        self.factories.insert(
+            ServiceIdentifier::Exporter(factory.component_name().into()),
+            Factory::Exporter(Box::new(factory)),
+        );
+        self
+    }
 
-            if exporter_nodes.is_empty() {
-                tracing::warn!("skipping pipeline {pipeline_id:?} without exporters");
-                continue;
-            }
+    pub async fn build(mut self, config: config::Config) -> eyre::Result<Pipelines> {
+        let (graph, source_node) = build_pipeline_graph(&config)?;
 
-            // connect source node to all receivers
-            for receiver_node in receiver_nodes.iter() {
-                graph.add_edge(source_node, *receiver_node, edge);
-            }
-
-            // connect receiver nodes to the first processor
-            if let Some(first_processor_node) = processor_nodes.first() {
-                for receiver_node in receiver_nodes.iter() {
-                    graph.add_edge(*receiver_node, *first_processor_node, edge);
-                }
-            }
-
-            // chain the processors
-            for (last_processor_node, processor_node) in
-                processor_nodes.iter().zip(processor_nodes.iter().skip(1))
-            {
-                graph.add_edge(*last_processor_node, *processor_node, edge);
-            }
-
-            // connect the last processor to all exporters
-            if let Some(last_processor_node) = processor_nodes.last() {
-                for exporter_node in exporter_nodes.iter() {
-                    graph.add_edge(*last_processor_node, *exporter_node, edge);
-                }
-            }
-
-            if processor_nodes.is_empty() {
-                // connect each receiver to each exporter
-                for receiver_node in receiver_nodes.iter() {
-                    for exporter_node in exporter_nodes.iter() {
-                        graph.add_edge(*receiver_node, *exporter_node, edge);
-                    }
-                }
-            }
-
-            // connect exporters to sink node
-            for exporter_node in exporter_nodes.iter() {
-                graph.add_edge(*exporter_node, sink_node, edge);
-            }
-
-            // we want to build mutliple pipeline graphs, but for now just construct
-            let pipeline_receivers = pipeline
-                .receivers
-                .into_iter()
-                .map(|id| ServiceIdentifier::Receiver(id));
-            let pipeline_processors = pipeline
-                .processors
-                .into_iter()
-                .map(|id| ServiceIdentifier::Processor(id));
-            let pipeline_exporters = pipeline
-                .exporters
-                .into_iter()
-                .map(|id| ServiceIdentifier::Exporter(id));
-
-            for unique_service_id in pipeline_receivers
-                .chain(pipeline_processors)
-                .chain(pipeline_exporters)
-            {
-                if services.contains_key(&unique_service_id) {
-                    continue;
-                }
-                let unique_id = unique_service_id.id();
-                let service =
-                    crate::service_id(&unique_id).ok_or_else(|| ServiceError::InvalidFormat {
-                        kind: unique_service_id.kind(),
-                        id: unique_id.to_string(),
-                    })?;
-                let raw_config = match &unique_service_id {
-                    ServiceIdentifier::Receiver(receiver_id) => {
-                        config.receivers.receivers.remove(receiver_id)
-                    }
-                    ServiceIdentifier::Processor(processor_id) => {
-                        config.processors.processors.remove(processor_id)
-                    }
-                    ServiceIdentifier::Exporter(exporter_id) => {
-                        config.exporters.exporters.remove(exporter_id)
-                    }
-                };
-                let raw_config = raw_config.ok_or_else(|| ServiceError::MissingService {
-                    kind: unique_service_id.kind(),
-                    id: unique_id.to_string(),
-                })?;
-
-                // build the service
-                match B::build_service(&unique_service_id, &service, raw_config) {
-                    Ok(service) => {
-                        services.insert(unique_service_id, service);
-                    }
-                    Err(err) => {
-                        tracing::error!("failed to build {unique_service_id}: {err}");
-                    }
-                }
-            }
+        if graph.node_indices().len() == 2 {
+            // pipeline is empty: only have source and sink
+            // TODO: should we fail or connect source to sink and do nothing?
+            eyre::bail!("empty pipeline");
         }
 
-        print_pipeline_paths(&graph);
+        let services = build_services(&graph, &self.factories, config).await?;
 
-        Ok(Self {
+        // print_pipeline_paths(&graph);
+
+        Ok(Pipelines {
             services,
             pipelines: graph,
         })
     }
 }
 
+pub type ServiceMap = HashMap<ServiceIdentifier, Service>;
+
+#[derive(Debug)]
+pub struct Pipelines {
+    pub services: ServiceMap,
+    pub pipelines: PipelineGraph,
+}
+
+pub async fn build_services(
+    graph: &PipelineGraph,
+    factories: &FactoryMap,
+    mut config: config::Config,
+) -> eyre::Result<ServiceMap> {
+    let mut services = HashMap::new();
+    for node in graph.node_weights() {
+        dbg!(&node);
+        let PipelineNode::Service(unique_service_id) = node else {
+            continue;
+        };
+        let unique_id = unique_service_id.id();
+        let service_id = unique_service_id.to_service_id()?;
+
+        let raw_config = match &unique_service_id {
+            ServiceIdentifier::Receiver(receiver_id) => {
+                config.receivers.receivers.remove(receiver_id)
+            }
+            ServiceIdentifier::Processor(processor_id) => {
+                config.processors.processors.remove(processor_id)
+            }
+            ServiceIdentifier::Exporter(exporter_id) => {
+                config.exporters.exporters.remove(exporter_id)
+            }
+        };
+        let missing_service_error = || ServiceError::MissingService {
+            kind: unique_service_id.kind(),
+            id: unique_id.to_string(),
+        };
+        let raw_config = raw_config.ok_or_else(missing_service_error)?;
+
+        let service = match factories.get(&service_id) {
+            Some(Factory::Receiver(factory)) => {
+                Service::Receiver(factory.build(unique_id.to_string(), raw_config).await?)
+            }
+            Some(Factory::Processor(factory)) => {
+                Service::Processor(factory.build(unique_id.to_string(), raw_config).await?)
+            }
+            Some(Factory::Exporter(factory)) => {
+                Service::Exporter(factory.build(unique_id.to_string(), raw_config).await?)
+            }
+            None => {
+                return Err(missing_service_error().into());
+            }
+        };
+
+        assert_eq!(unique_service_id.kind(), service.kind());
+        services.insert(unique_service_id.clone(), service);
+        // match (unique_id.kind(), service) {
+        //             (ServiceKind::Processor, "debug") => {
+        //                 todo!()
+        //             }
+        //             // (ServiceKind::Exporter, "otlp") => {
+        //             //     let otlp_exporter = OtlpExporter::from_config(unique_id.to_string(), raw_config)
+        //             //         .map_err(|err| ServiceError::Service(err.into()))?;
+        //             //     Ok(Service::Exporter(Box::new(otlp_exporter)))
+        //             // }
+        //             // (ServiceKind::Processor, "batch") => {
+        //             //     let batch_processor =
+        //             //         BatchProcessor::from_config(unique_id.to_string(), raw_config)
+        //             //             .map_err(|err| ServiceError::Service(err.into()))?;
+        //             //     Ok(Service::Processor(Box::new(batch_processor)))
+        //             // }
+        //             // (ServiceKind::Receiver, "mongodb") => {
+        //             //     let mongodb_receiver =
+        //             //         MongoDbReceiver::from_config(unique_id.to_string(), raw_config)
+        //             //             .map_err(|err| ServiceError::Service(err.into()))?;
+        //             //     Ok(Service::Receiver(Box::new(mongodb_receiver)))
+        //             // }
+    }
+    tracing::info!("done building services");
+    Ok(services)
+}
+
+// for unique_service_id in pipeline_receivers
+//     .chain(pipeline_processors)
+//     .chain(pipeline_exporters)
+// {
+//     if services.contains_key(&unique_service_id) {
+//         continue;
+//     }
+//     let unique_id = unique_service_id.id();
+//     let service =
+//         crate::service_id(&unique_id).ok_or_else(|| ServiceError::InvalidFormat {
+//             kind: unique_service_id.kind(),
+//             id: unique_id.to_string(),
+//         })?;
+//     let raw_config = match &unique_service_id {
+//         ServiceIdentifier::Receiver(receiver_id) => {
+//             config.receivers.receivers.remove(receiver_id)
+//         }
+//         ServiceIdentifier::Processor(processor_id) => {
+//             config.processors.processors.remove(processor_id)
+//         }
+//         ServiceIdentifier::Exporter(exporter_id) => {
+//             config.exporters.exporters.remove(exporter_id)
+//         }
+//     };
+//     let raw_config = raw_config.ok_or_else(|| ServiceError::MissingService {
+//         kind: unique_service_id.kind(),
+//         id: unique_id.to_string(),
+//     })?;
+//
+//     // build the service
+//     match B::build_service(&unique_service_id, &service, raw_config) {
+//         Ok(service) => {
+//             services.insert(unique_service_id, service);
+//         }
+//         Err(err) => {
+//             tracing::error!("failed to build {unique_service_id}: {err}");
+//         }
+//     }
+// }
+// }
+
+pub fn build_pipeline_graph(
+    config: &config::Config,
+) -> eyre::Result<(PipelineGraph, petgraph::graph::NodeIndex)> {
+    let mut graph = PipelineGraph::default();
+
+    let source_node = graph.add_node(PipelineNode::Source);
+    let sink_node = graph.add_node(PipelineNode::Sink);
+
+    for (pipeline_id, pipeline) in config.service.pipelines.pipelines.iter() {
+        let edge = match crate::service_id(&pipeline_id).as_deref() {
+            Some("metrics") => PipelineEdge::Metrics,
+            Some("logs") => PipelineEdge::Logs,
+            Some("traces") => PipelineEdge::Traces,
+            Some(other) => {
+                tracing::warn!("skipping pipeline {pipeline_id:?} of unknown type {other:?}");
+                continue;
+            }
+            None => {
+                tracing::warn!("skipping pipeline {pipeline_id:?} with invalid format");
+                continue;
+            }
+        };
+
+        let receiver_nodes = pipeline
+            .receivers
+            .iter()
+            .map(|receiver_id| {
+                graph.get_or_insert_node(PipelineNode::Service(ServiceIdentifier::Receiver(
+                    receiver_id.to_string(),
+                )))
+            })
+            .collect::<Vec<_>>();
+
+        if receiver_nodes.is_empty() {
+            tracing::warn!("skipping pipeline {pipeline_id:?} without receivers");
+            continue;
+        };
+
+        let processor_nodes = pipeline
+            .processors
+            .iter()
+            .map(|processor_id| {
+                graph.get_or_insert_node(PipelineNode::Service(ServiceIdentifier::Processor(
+                    processor_id.to_string(),
+                )))
+            })
+            .collect::<Vec<_>>();
+
+        let exporter_nodes = pipeline
+            .exporters
+            .iter()
+            .map(|exporter_id| {
+                graph.get_or_insert_node(PipelineNode::Service(ServiceIdentifier::Exporter(
+                    exporter_id.to_string(),
+                )))
+            })
+            .collect::<Vec<_>>();
+
+        if exporter_nodes.is_empty() {
+            tracing::warn!("skipping pipeline {pipeline_id:?} without exporters");
+            continue;
+        }
+
+        // connect source node to all receivers
+        for receiver_node in receiver_nodes.iter() {
+            graph.add_edge(source_node, *receiver_node, edge);
+        }
+
+        // connect receiver nodes to the first processor
+        if let Some(first_processor_node) = processor_nodes.first() {
+            for receiver_node in receiver_nodes.iter() {
+                graph.add_edge(*receiver_node, *first_processor_node, edge);
+            }
+        }
+
+        // chain the processors
+        for (last_processor_node, processor_node) in
+            processor_nodes.iter().zip(processor_nodes.iter().skip(1))
+        {
+            graph.add_edge(*last_processor_node, *processor_node, edge);
+        }
+
+        // connect the last processor to all exporters
+        if let Some(last_processor_node) = processor_nodes.last() {
+            for exporter_node in exporter_nodes.iter() {
+                graph.add_edge(*last_processor_node, *exporter_node, edge);
+            }
+        }
+
+        if processor_nodes.is_empty() {
+            // connect each receiver to each exporter
+            for receiver_node in receiver_nodes.iter() {
+                for exporter_node in exporter_nodes.iter() {
+                    graph.add_edge(*receiver_node, *exporter_node, edge);
+                }
+            }
+        }
+
+        // connect exporters to sink node
+        for exporter_node in exporter_nodes.iter() {
+            graph.add_edge(*exporter_node, sink_node, edge);
+        }
+    }
+    Ok((graph, source_node))
+}
+
+// impl Pipelines {
+//     pub fn from_config(mut config: config::Config) -> eyre::Result<Self> {
+//
+//     }
+// }
+
 fn print_pipeline_paths(graph: &PipelineGraph) {
     tracing::debug!("=== PIPELINES:");
     let mut sources = graph.externals(petgraph::Direction::Incoming);
     let mut sinks = graph.externals(petgraph::Direction::Outgoing);
+    dbg!(sources.clone().collect::<Vec<_>>());
+    dbg!(sinks.clone().collect::<Vec<_>>());
     let source = sources.next().unwrap();
     assert_eq!(sources.next(), None);
     let sink = sinks.next().unwrap();
     assert_eq!(sinks.next(), None);
 
-    let start_end = [(source, sink)];
-    dbg!(start_end);
-    let ways: Vec<Vec<&PipelineNode>> = start_end
-        .iter()
-        .flat_map(|(receiver_node, exporter_node)| {
-            petgraph::algo::all_simple_paths::<Vec<_>, _>(
-                &graph,
-                *receiver_node,
-                *exporter_node,
-                0,
-                None,
-            )
-        })
-        .map(|path| {
-            path.into_iter()
-                .map(|idx| graph.node_weight(idx).unwrap())
-                .collect()
-        })
-        .collect();
+    dbg!(&graph);
 
-    let unique_ways = std::collections::HashSet::<Vec<&PipelineNode>>::from_iter(ways);
+    // let start_end = [(source, sink)];
+    let ways: Vec<Vec<_>> =
+        petgraph::algo::all_simple_paths(&graph, source, sink, 0, None).collect();
+    // .map(|path| );
+
+    // dbg!(start_end);
+    // let ways: Vec<Vec<&PipelineNode>> = start_end
+    //     .iter()
+    //     .flat_map(|(receiver_node, exporter_node)| {
+    //         petgraph::algo::all_simple_paths::<Vec<_>, _>(
+    //             &graph,
+    //             *receiver_node,
+    //             *exporter_node,
+    //             0,
+    //             None,
+    //         )
+    //     })
+    //     .map(|path| {
+    //         path.into_iter()
+    //             .map(|idx| graph.node_weight(idx).unwrap())
+    //             .collect()
+    //     })
+    //     .collect();
+
+    let unique_ways = std::collections::HashSet::<Vec<petgraph::graph::NodeIndex>>::from_iter(ways);
+    // let unique_ways = std::collections::HashSet::<Vec<&PipelineNode>>::from_iter(ways);
 
     for path in unique_ways {
         tracing::debug!(
             "{}",
-            path.iter()
-                .map(|id| id.to_string())
+            path.into_iter()
+                .map(|node_idx| graph.node_weight(node_idx).unwrap().to_string())
                 .collect::<Vec<_>>()
                 .join(" -> ")
         );
@@ -479,7 +657,7 @@ where
         match dep.weight() {
             PipelineEdge::Metrics => {
                 if let Some(metrics) = dep_service.metrics() {
-                    merged_metrics.insert(dep_service.service_id(), metrics);
+                    merged_metrics.insert(dep_service.to_service_id(), metrics);
                 }
             }
             PipelineEdge::Traces => {}
@@ -515,11 +693,17 @@ impl PipelineExecutor {
 
         let mut bfs = petgraph::visit::Bfs::new(&pipeline_graph, source);
         while let Some(node_idx) = bfs.next(&pipeline_graph) {
-            let node = pipeline_graph.node_weight(node_idx).unwrap();
+            let node = pipeline_graph
+                .node_weight(node_idx)
+                .ok_or_else(|| eyre::eyre!("internal: missing node {node_idx:?}"))?;
             let PipelineNode::Service(service_id) = node else {
                 continue;
             };
-            let service = self.pipelines.services.remove(service_id).unwrap();
+            let service = self
+                .pipelines
+                .services
+                .remove(service_id)
+                .ok_or_else(|| eyre::eyre!("internal: missing service {service_id}"))?;
 
             tracing::debug!("starting {:?}", pipeline_graph.node_weight(node_idx));
 

@@ -14,6 +14,7 @@ use opentelemetry::{InstrumentationLibrary, KeyValue, Value};
 use opentelemetry_sdk::metrics::data::{Metric, ResourceMetrics, ScopeMetrics};
 use opentelemetry_sdk::Resource;
 use otel_collector_component::ext::NumDatapoints;
+use otel_collector_component::factory::ComponentName;
 use otel_collector_component::{MetricPayload, MetricsStream};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -26,10 +27,15 @@ use tracing::{debug, info, trace, warn};
 pub const DEFAULT_PORT: u16 = 27017;
 
 lazy_static::lazy_static! {
+    static ref COMPONENT_NAME: ComponentName = ComponentName::new("mongodb").unwrap();
     static ref LIBRARY: InstrumentationLibrary = opentelemetry_sdk::InstrumentationLibrary::builder("mongodb-opentelemetry-collector")
         .with_version(env!("CARGO_PKG_VERSION"))
         .with_schema_url("https://opentelemetry.io/schemas/1.17.0")
         .build();
+    // var (
+    //     Type      = component.MustNewType("otlp")
+    //     ScopeName = "go.opentelemetry.io/collector/exporter/otlpexporter"
+    // )
 }
 
 // pub trait Scrape {
@@ -164,7 +170,25 @@ impl Default for Metrics {
     }
 }
 
-#[derive()]
+#[derive(Debug, Default)]
+pub struct Factory {}
+
+#[async_trait::async_trait]
+impl otel_collector_component::factory::ReceiverFactory for Factory {
+    fn component_name(&self) -> &ComponentName {
+        &COMPONENT_NAME
+    }
+
+    async fn build(
+        &self,
+        id: String,
+        config: serde_yaml::Value,
+    ) -> eyre::Result<Box<dyn otel_collector_component::Receiver>> {
+        let receiver = Receiver::from_config(id, config).await?;
+        Ok(Box::new(receiver))
+    }
+}
+
 pub struct Receiver {
     pub id: String,
     pub config: config::MongoDbReceiverConfig,
@@ -193,8 +217,9 @@ impl Receiver {
             .first()
             .map(|host| host.endpoint.to_string())
             .ok_or_else(|| eyre::eyre!("missing mongodb host"))?;
-        let scraper =
-            crate::scrape::MetricScraper::new(&crate::scrape::Options { connection_uri }).await?;
+        dbg!(&connection_uri);
+        let options = crate::scrape::Options { connection_uri };
+        let scraper = crate::scrape::MetricScraper::new(&options).await?;
         let (metrics_tx, _) = broadcast::channel(DEFAULT_BUFFER_SIZE);
         Ok(Self {
             id,

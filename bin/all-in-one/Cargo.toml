@@ -25,8 +25,11 @@ exclude = []
 
 [features]
 default = ["full"]
-full = ["mongodb"]
+full = ["mongodb", "batch", "otlp-exporter"]
+
 mongodb = ["otel-mongodb-receiver"]
+batch = ["otel-batch-processor"]
+otlp-exporter = ["otel-otlp-exporter"]
 
 [dependencies]
 color-eyre = "0"
@@ -46,4 +49,5 @@ otel-collector-component = { path = "../../crates/component" }
 
 # optional
 otel-mongodb-receiver = { path = "../../crates/receivers/mongodb", optional = true }
+otel-batch-processor = { path = "../../crates/processors/batch", optional = true }
 otel-otlp-exporter = { path = "../../crates/exporters/otlp", optional = true }

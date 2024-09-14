@@ -5,11 +5,35 @@ pub mod config;
 use crate::config::BatchProcessorConfig;
 use color_eyre::eyre;
 use futures::StreamExt;
+use otel_collector_component::factory::ComponentName;
 use otel_collector_component::{MetricPayload, MetricsStream};
 use tokio::sync::{broadcast, watch};
 use tokio_stream::wrappers::BroadcastStream;
 
 pub const DEFAULT_BUFFER_SIZE: usize = 1024;
+
+lazy_static::lazy_static! {
+    static ref COMPONENT_NAME: ComponentName = ComponentName::new("batch").unwrap();
+}
+
+#[derive(Debug, Default)]
+pub struct Factory {}
+
+#[async_trait::async_trait]
+impl otel_collector_component::factory::ProcessorFactory for Factory {
+    fn component_name(&self) -> &ComponentName {
+        &COMPONENT_NAME
+    }
+
+    async fn build(
+        &self,
+        id: String,
+        config: serde_yaml::Value,
+    ) -> eyre::Result<Box<dyn otel_collector_component::Processor>> {
+        let processor = BatchProcessor::from_config(id, config)?;
+        Ok(Box::new(processor))
+    }
+}
 
 #[derive(Debug)]
 pub struct BatchProcessor {
@@ -50,7 +74,7 @@ impl otel_collector_component::Processor for BatchProcessor {
                 }
             };
             if let Err(err) = self.metrics_tx.send(metric) {
-                tracing::error!("{} failed to send: {err}", self.service_id());
+                tracing::error!("{} failed to send: {err}", self.to_service_id());
             }
         }
         Ok(())

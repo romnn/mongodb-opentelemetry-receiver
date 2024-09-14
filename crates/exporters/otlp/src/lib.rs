@@ -7,8 +7,32 @@ use futures::StreamExt;
 use opentelemetry_sdk::export::logs::LogBatch;
 use opentelemetry_sdk::metrics::data::{Metric, ResourceMetrics, ScopeMetrics, Temporality};
 use opentelemetry_sdk::{export::trace::SpanData, logs::LogData, metrics::exporter};
+use otel_collector_component::factory::ComponentName;
 use otel_collector_component::MetricsStream;
 use tokio::sync::{broadcast, watch};
+
+lazy_static::lazy_static! {
+    static ref COMPONENT_NAME: ComponentName = ComponentName::new("otlp").unwrap();
+}
+
+#[derive(Debug, Default)]
+pub struct Factory {}
+
+#[async_trait::async_trait]
+impl otel_collector_component::factory::ExporterFactory for Factory {
+    fn component_name(&self) -> &ComponentName {
+        &COMPONENT_NAME
+    }
+
+    async fn build(
+        &self,
+        id: String,
+        config: serde_yaml::Value,
+    ) -> eyre::Result<Box<dyn otel_collector_component::Exporter>> {
+        let receiver = OtlpExporter::from_config(id, config)?;
+        Ok(Box::new(receiver))
+    }
+}
 
 #[derive(Debug)]
 pub struct OtlpExporter {
@@ -64,8 +88,9 @@ impl OtlpExporter {
             timeout: std::time::Duration::from_secs(60),
         };
 
-        let tls_config = None;
-        let channel = build_transport_channel(&export_config(), tls_config)?;
+        // let tls_config = None;
+        // let channel = build_transport_channel(&export_config(), tls_config)?;
+        // dbg!(&channel);
 
         let batch_config = opentelemetry_sdk::trace::BatchConfig::default();
         // userAgent := fmt.Sprintf("%s/%s (%s/%s)",
