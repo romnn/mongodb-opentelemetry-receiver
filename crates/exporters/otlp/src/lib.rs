@@ -200,7 +200,7 @@ impl otel_collector_component::Exporter for OtlpExporter {
                 metrics.len(),
             );
             // TODO: send the metrics here
-            tokio::time::sleep(std::time::Duration::from_secs(30)).await;
+            tokio::time::sleep(std::time::Duration::from_secs(10)).await;
         }
         Ok(())
     }

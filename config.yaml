@@ -16,8 +16,8 @@ receivers:
       - endpoint: "mongodb://other-host:27017"
 processors:
   batch:
-    send_batch_size: 100
-    timeout: 10s
+    send_batch_size: 10
+    timeout: 1s
 exporters:
   debug:
     verbosity: detailed

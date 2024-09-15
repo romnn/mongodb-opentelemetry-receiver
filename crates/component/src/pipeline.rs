@@ -223,7 +223,10 @@ impl PipelineBuilder {
         self
     }
 
-    pub fn with_processors(mut self, factories: Vec<Box<dyn ProcessorFactory + 'static>>) -> Self {
+    pub fn with_processors(
+        mut self,
+        factories: impl IntoIterator<Item = Box<dyn ProcessorFactory>>,
+    ) -> Self {
         self.factories.extend(factories.into_iter().map(|factory| {
             (
                 ServiceIdentifier::Processor(factory.component_name().into()),

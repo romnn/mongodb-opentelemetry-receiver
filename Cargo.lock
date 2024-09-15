@@ -1397,11 +1397,13 @@ dependencies = [
  "futures",
  "lazy_static",
  "otel-collector-component",
+ "pin-project",
  "serde",
  "serde_yaml",
  "thiserror",
  "tokio",
  "tokio-stream",
+ "tokio-util",
  "tracing",
 ]
 
@@ -2294,6 +2296,7 @@ dependencies = [
  "futures-io",
  "futures-sink",
  "pin-project-lite",
+ "slab",
  "tokio",
 ]
 

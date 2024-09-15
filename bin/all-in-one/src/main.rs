@@ -110,11 +110,6 @@ fn setup_telemetry(options: &TelemetryOptions) -> eyre::Result<()> {
             + 'static,
     >;
 
-    // impl<S> Layer<S> for Box<dyn Layer<S> + Send + Sync>
-    // let fmt_layer: BoxedFmtLayer = match log_format {
-    //     LogFormat::Json => Box::new(fmt_layer_json),
-    //     LogFormat::Pretty => Box::new(fmt_layer_pretty),
-    // };
     let subscriber = tracing_subscriber::registry()
         .with(telemetry)
         .with(if log_format == LogFormat::Json {
@@ -154,8 +149,6 @@ async fn main() -> eyre::Result<()> {
         shutdown_tx.send(true).unwrap();
     });
 
-    // dbg!(&options);
-
     let config = if let Some(path) = options.config_path {
         let config = otel_collector_component::config::Config::from_file(path)?;
         config
@@ -163,47 +156,15 @@ async fn main() -> eyre::Result<()> {
         otel_collector_component::config::Config::default()
     };
 
-    // dbg!(&config);
-    // info!(?config);
-
-    // use collector::pipeline::PipelineBuilder;
-    // use otel_collector_component::pipeline::{BuiltinServiceBuilder, Pipelines};
     let pipelines = PipelineBuilder::new()
         .with_receiver(otel_mongodb_receiver::Factory::default())
-        .with_processors(vec![
-            Box::new(otel_batch_processor::Factory::default()), // Box::new(otel_batch_processor::Factory::default()) as Box<dyn ProcessorFactory>
-        ])
+        .with_processors([Box::new(otel_batch_processor::Factory::default()) as _])
         .with_exporter(otel_otlp_exporter::Factory::default())
         .build(config)
         .await?;
 
-    // let pipelines = Pipelines::from_config::<BuiltinServiceBuilder>(config)?;
-    // tracing::debug!(?pipelines);
     tracing::debug!("done building pipelines");
-    // dbg!(&pipelines);
-    // let pipeline_manager = collector::pipeline::PipelineManager::new(pipelines)?;
     let pipeline_executor = otel_collector_component::pipeline::PipelineExecutor { pipelines };
     pipeline_executor.start(shutdown_rx).await?;
-
-    // let options = collector::mongodb::Options {
-    //     connection_uri: options.connection_uri,
-    // };
-    //
-    // // let scraper_future = MetricScraper::new(&options).await?;
-    // let scraper_future = collector::mongodb::MetricScraper::new(&options);
-    // let scraper = tokio::select! {
-    //     scraper = scraper_future => scraper,
-    //     _ = shutdown_rx.changed() => return Ok(()),
-    // };
-    // // _ = tokio::signal::ctrl_c() => return Ok(()),
-    // let scraper = scraper?;
-    //
-    // let interval = std::time::Duration::from_secs(30);
-    // let scheduler = collector::scrape::ScrapeScheduler::new(scraper, interval, shutdown_rx);
-    // let scheduler = std::sync::Arc::new(scheduler);
-    // // let scheduler_clone = scheduler.clone();
-    //
-    // info!(?interval, "starting scraper");
-    // scheduler.start().await;
     Ok(())
 }
