@@ -106,12 +106,6 @@ pub fn service_id(value: &str) -> Option<String> {
 
 #[async_trait::async_trait]
 pub trait Receiver: Producer + std::fmt::Debug + Send + Sync + 'static {
-    fn id(&self) -> &str;
-
-    fn to_service_id(&self) -> ServiceIdentifier {
-        ServiceIdentifier::Receiver(self.id().to_string())
-    }
-
     async fn start(self: Box<Self>, shutdown_rx: watch::Receiver<bool>) -> eyre::Result<()>;
 }
 
@@ -122,12 +116,6 @@ pub trait Producer: Send + Sync + 'static {
 
 #[async_trait::async_trait]
 pub trait Processor: Producer + std::fmt::Debug + Send + Sync + 'static {
-    fn id(&self) -> &str;
-
-    fn to_service_id(&self) -> ServiceIdentifier {
-        ServiceIdentifier::Processor(self.id().to_string())
-    }
-
     async fn start(
         self: Box<Self>,
         shutdown_rx: watch::Receiver<bool>,
@@ -137,12 +125,6 @@ pub trait Processor: Producer + std::fmt::Debug + Send + Sync + 'static {
 
 #[async_trait::async_trait]
 pub trait Exporter: std::fmt::Debug + Send + Sync + 'static {
-    fn id(&self) -> &str;
-
-    fn to_service_id(&self) -> ServiceIdentifier {
-        ServiceIdentifier::Exporter(self.id().to_string())
-    }
-
     async fn start(
         self: Box<Self>,
         shutdown_rx: watch::Receiver<bool>,

@@ -2,7 +2,6 @@
 
 use clap::Parser;
 use color_eyre::eyre;
-// use mongodb_opentelemetry_receiver as collector;
 use opentelemetry::trace::TracerProvider as TracerProviderTrait;
 use opentelemetry_sdk::trace::TracerProvider;
 use otel_collector_component::{factory::ProcessorFactory, pipeline::PipelineBuilder};
@@ -10,63 +9,141 @@ use std::path::PathBuf;
 use tracing::{info, warn};
 use tracing_subscriber::layer::SubscriberExt;
 
+pub const APPLICATION_NAME: &'static str = "mongodb-opentelemetry-receiver";
+
+#[derive(Debug, Clone, Copy, Hash, PartialEq, Eq, PartialOrd, Ord)]
+pub enum LogFormat {
+    Json,
+    Pretty,
+}
+
+impl std::str::FromStr for LogFormat {
+    type Err = eyre::Report;
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s {
+            s if s.eq_ignore_ascii_case("json") => Ok(LogFormat::Json),
+            s if s.eq_ignore_ascii_case("pretty") => Ok(LogFormat::Pretty),
+            other => Err(eyre::eyre!("unknown log format: {other:?}")),
+        }
+    }
+}
+
 #[derive(Debug, Parser)]
 #[command(author, version, about, long_about = None)]
 #[command(propagate_version = true)]
 pub struct Options {
-    // #[arg(long = "uri", help = "MongoDB connection URI")]
-    // pub connection_uri: String,
-    // #[arg(long = "interval", help = "Scrape interval")]
-    // pub interval_secs: Option<usize>,
-    #[arg(short = 'c', long = "config", aliases = ["conf"],  help = "Path to YAML config file")]
+    #[arg(long = "log", env = "LOG_LEVEL", aliases = ["log-level"],  help = "Log level. When using a more sophisticated logging setup using RUST_LOG environment variable, this option is overwritten.")]
+    pub log_level: Option<tracing::metadata::Level>,
+
+    #[arg(
+        long = "log-format",
+        env = "LOG_FORMAT",
+        help = "Log format (json or pretty)"
+    )]
+    pub log_format: Option<LogFormat>,
+
+    #[arg(short = 'c', long = "config", env = "CONFIG", aliases = ["conf"],  help = "Path to YAML config file")]
     pub config_path: Option<PathBuf>,
 }
 
-pub const APPLICATION_NAME: &'static str = "mongodb-opentelemetry-receiver";
+struct TelemetryOptions {
+    application_name: &'static str,
+    log_level: Option<tracing::metadata::Level>,
+    log_format: Option<LogFormat>,
+}
 
-fn setup_telemetry() {
-    // create a new OpenTelemetry trace pipeline that prints to stdout
+fn setup_telemetry(options: &TelemetryOptions) -> eyre::Result<()> {
     let provider = TracerProvider::builder()
         // .with_simple_exporter(stdout::SpanExporter::default())
         .build();
-    let tracer = provider.tracer(APPLICATION_NAME);
+    let tracer = provider.tracer(options.application_name);
 
     // create a tracing layer with the configured tracer
     let telemetry = tracing_opentelemetry::layer().with_tracer(tracer);
 
-    // Use the tracing subscriber `Registry`, or any other subscriber
-    // that impls `LookupSpan`
-    // let registry = Registry::default().with(telemetry);
-    // tracing_subscriber::fmt().json().init();
+    let default_log_level = options.log_level.unwrap_or(tracing::metadata::Level::INFO);
+    let default_env_filter = tracing_subscriber::filter::EnvFilter::builder()
+        .with_default_directive(default_log_level.into())
+        .parse_lossy("");
+
+    let env_filter_directive = std::env::var("RUST_LOG").ok();
+    let env_filter = match env_filter_directive {
+        Some(directive) => {
+            match tracing_subscriber::filter::EnvFilter::builder()
+                .with_env_var(directive)
+                .try_from_env()
+            {
+                Ok(env_filter) => env_filter,
+                Err(err) => {
+                    eprintln!("invalid log filter: {err}");
+                    eprintln!("falling back to default logging");
+                    default_env_filter
+                }
+            }
+        }
+        None => default_env_filter,
+    };
+
+    // autodetect logging format
+    let log_format = options.log_format.unwrap_or_else(|| {
+        if atty::is(atty::Stream::Stdout) {
+            // terminal
+            LogFormat::Pretty
+        } else {
+            // not a terminal
+            LogFormat::Json
+        }
+    });
+
+    let fmt_layer_pretty = tracing_subscriber::fmt::Layer::new()
+        .compact()
+        .with_writer(std::io::stdout);
+    let fmt_layer_json = tracing_subscriber::fmt::Layer::new()
+        .json()
+        .compact()
+        .with_writer(std::io::stdout);
+
+    type BoxedFmtLayer = Box<
+        dyn tracing_subscriber::Layer<tracing_subscriber::registry::Registry>
+            + Send
+            + Sync
+            + 'static,
+    >;
+
+    // impl<S> Layer<S> for Box<dyn Layer<S> + Send + Sync>
+    // let fmt_layer: BoxedFmtLayer = match log_format {
+    //     LogFormat::Json => Box::new(fmt_layer_json),
+    //     LogFormat::Pretty => Box::new(fmt_layer_pretty),
+    // };
     let subscriber = tracing_subscriber::registry()
         .with(telemetry)
-        // .with(
-        // tracing_subscriber::filter::de()
-        //     .add_directive(tracing::Level::DEBUG.into()),
-        // )
-        .with(
-            tracing_subscriber::fmt::Layer::new()
-                .pretty()
-                .compact()
-                // .with_level(tracing::Level::DEBUG)
-                // .with_max_level(tracing_subscriber::Level::DEBUG)
-                .with_writer(std::io::stdout),
-        )
-        .with(tracing_subscriber::filter::EnvFilter::from_default_env());
-    // .init()
-    // .unwrap();
-    tracing::subscriber::set_global_default(subscriber).unwrap();
-    // .with(
-    //     tracing_subscriber::fmt::Layer::new()
-    //         .json()
-    //         .with_writer(non_blocking),
-    // );
+        .with(if log_format == LogFormat::Json {
+            Some(fmt_layer_json)
+        } else {
+            None
+        })
+        .with(if log_format == LogFormat::Pretty {
+            Some(fmt_layer_pretty)
+        } else {
+            None
+        })
+        .with(env_filter);
+    tracing::subscriber::set_global_default(subscriber)?;
+    Ok(())
 }
 
 #[tokio::main]
 async fn main() -> eyre::Result<()> {
     color_eyre::install()?;
-    setup_telemetry();
+
+    // parse config
+    let options = Options::parse();
+
+    setup_telemetry(&TelemetryOptions {
+        application_name: APPLICATION_NAME,
+        log_level: options.log_level,
+        log_format: options.log_format,
+    })?;
 
     let (shutdown_tx, shutdown_rx) = tokio::sync::watch::channel(false);
 
@@ -77,8 +154,6 @@ async fn main() -> eyre::Result<()> {
         shutdown_tx.send(true).unwrap();
     });
 
-    // parse config
-    let options = Options::parse();
     // dbg!(&options);
 
     let config = if let Some(path) = options.config_path {

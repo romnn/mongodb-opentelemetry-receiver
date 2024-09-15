@@ -62,9 +62,6 @@ impl MonotonicSequenceReceiver {
 
 #[async_trait::async_trait]
 impl crate::Receiver for MonotonicSequenceReceiver {
-    fn id(&self) -> &str {
-        &self.id
-    }
     async fn start(self: Box<Self>, mut shutdown_rx: watch::Receiver<bool>) -> eyre::Result<()> {
         // send data each second
         let mut interval = tokio::time::interval(std::time::Duration::from_secs(1));
@@ -153,21 +150,21 @@ impl Service {
         }
     }
 
-    pub fn to_service_id(&self) -> ServiceIdentifier {
-        match self {
-            Self::Receiver(receiver) => receiver.to_service_id(),
-            Self::Processor(processor) => processor.to_service_id(),
-            Self::Exporter(exporter) => exporter.to_service_id(),
-        }
-    }
-
-    pub fn id(&self) -> &str {
-        match self {
-            Self::Receiver(receiver) => receiver.id(),
-            Self::Processor(processor) => processor.id(),
-            Self::Exporter(exporter) => exporter.id(),
-        }
-    }
+    // pub fn to_service_id(&self) -> ServiceIdentifier {
+    //     match self {
+    //         Self::Receiver(receiver) => receiver.to_service_id(),
+    //         Self::Processor(processor) => processor.to_service_id(),
+    //         Self::Exporter(exporter) => exporter.to_service_id(),
+    //     }
+    // }
+    //
+    // pub fn id(&self) -> &str {
+    //     match self {
+    //         Self::Receiver(receiver) => receiver.id(),
+    //         Self::Processor(processor) => processor.id(),
+    //         Self::Exporter(exporter) => exporter.id(),
+    //     }
+    // }
 }
 
 #[derive(Debug, Copy, Clone, Hash, PartialEq, Eq, PartialOrd, Ord, strum::Display)]
@@ -507,7 +504,8 @@ where
         match dep.weight() {
             PipelineEdge::Metrics => {
                 if let Some(metrics) = dep_service.metrics() {
-                    merged_metrics.insert(dep_service.to_service_id(), metrics);
+                    merged_metrics.insert(dep_id.clone(), metrics);
+                    // merged_metrics.insert(dep_service.to_service_id(), metrics);
                 }
             }
             PipelineEdge::Traces => {}

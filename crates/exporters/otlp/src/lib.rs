@@ -171,17 +171,17 @@ impl OtlpExporter {
 
 #[async_trait::async_trait]
 impl otel_collector_component::Exporter for OtlpExporter {
-    fn id(&self) -> &str {
-        &self.id
-    }
-
     async fn start(
         self: Box<Self>,
-        shutdown_rx: watch::Receiver<bool>,
+        mut shutdown_rx: watch::Receiver<bool>,
         mut metrics: MetricsStream,
     ) -> eyre::Result<()> {
         tracing::debug!("{} is running", self.id);
-        while let Some((from, resource_metrics)) = metrics.next().await {
+        loop {
+            let (from, resource_metrics) = tokio::select! {
+                Some(payload) = metrics.next() => payload,
+                _ = shutdown_rx.changed() => break,
+            };
             let resource_metrics = match resource_metrics {
                 Ok(resource_metrics) => resource_metrics,
                 Err(err) => {
@@ -193,12 +193,14 @@ impl otel_collector_component::Exporter for OtlpExporter {
                 }
             };
             trace!(
-                "{} received {} metrics from {:?}",
+                "{} received {} metrics from {:?} [queue size = {}]",
                 self.id,
                 resource_metrics.len(),
-                from
+                from,
+                metrics.len(),
             );
             // TODO: send the metrics here
+            tokio::time::sleep(std::time::Duration::from_secs(30)).await;
         }
         Ok(())
     }

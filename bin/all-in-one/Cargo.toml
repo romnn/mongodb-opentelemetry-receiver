@@ -33,7 +33,8 @@ otlp-exporter = ["otel-otlp-exporter"]
 
 [dependencies]
 color-eyre = "0"
-clap = { version = "4", features = ["derive"] }
+atty = "0"
+clap = { version = "4", features = ["derive", "env"] }
 tokio = { version = "1", features = ["full"] }
 tokio-stream = { version = "0", features = ["sync", "time"] }
 

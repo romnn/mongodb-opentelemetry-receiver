@@ -172,9 +172,6 @@ impl Receiver {
 
 #[async_trait::async_trait]
 impl otel_collector_component::Receiver for Receiver {
-    fn id(&self) -> &str {
-        &self.id
-    }
     async fn start(
         mut self: Box<Self>,
         mut shutdown_rx: watch::Receiver<bool>,

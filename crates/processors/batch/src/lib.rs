@@ -57,16 +57,16 @@ impl BatchProcessor {
 
 #[async_trait::async_trait]
 impl otel_collector_component::Processor for BatchProcessor {
-    fn id(&self) -> &str {
-        &self.id
-    }
-
     async fn start(
         self: Box<Self>,
-        shutdown_rx: watch::Receiver<bool>,
+        mut shutdown_rx: watch::Receiver<bool>,
         mut metrics: MetricsStream,
     ) -> eyre::Result<()> {
-        while let Some((from, resource_metrics)) = metrics.next().await {
+        loop {
+            let (from, resource_metrics) = tokio::select! {
+                Some(payload) = metrics.next() => payload,
+                _ = shutdown_rx.changed() => break,
+            };
             let resource_metrics = match resource_metrics {
                 Ok(resource_metrics) => resource_metrics,
                 Err(err) => {
@@ -78,13 +78,15 @@ impl otel_collector_component::Processor for BatchProcessor {
                 }
             };
             trace!(
-                "{} received {} metrics from {:?}",
+                "{} received {} metrics from {:?} [queue size = {}]",
                 self.id,
                 resource_metrics.len(),
-                from
+                from,
+                self.metrics_tx.len(),
+                // tokio::time::sleep(std::time::Duration::from_secs(30)).await;
             );
             if let Err(err) = self.metrics_tx.send(resource_metrics) {
-                tracing::error!("{} failed to send: {err}", self.to_service_id());
+                tracing::error!("{} failed to send: {err}", self.id);
             }
         }
         Ok(())
