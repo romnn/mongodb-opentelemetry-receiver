@@ -62,9 +62,14 @@ fn setup_telemetry(options: &TelemetryOptions) -> eyre::Result<()> {
     let telemetry = tracing_opentelemetry::layer().with_tracer(tracer);
 
     let default_log_level = options.log_level.unwrap_or(tracing::metadata::Level::INFO);
+    let default_log_directive = format!(
+        "none,otel_={}",
+        default_log_level.to_string().to_ascii_lowercase()
+    );
     let default_env_filter = tracing_subscriber::filter::EnvFilter::builder()
+        .with_regex(true)
         .with_default_directive(default_log_level.into())
-        .parse_lossy("");
+        .parse(default_log_directive)?;
 
     let env_filter_directive = std::env::var("RUST_LOG").ok();
     let env_filter = match env_filter_directive {
@@ -163,7 +168,6 @@ async fn main() -> eyre::Result<()> {
         .build(config)
         .await?;
 
-    tracing::debug!("done building pipelines");
     let pipeline_executor = otel_collector_component::pipeline::PipelineExecutor { pipelines };
     pipeline_executor.start(shutdown_rx).await?;
     Ok(())

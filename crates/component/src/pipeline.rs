@@ -86,7 +86,7 @@ impl crate::Receiver for MonotonicSequenceReceiver {
                 )]),
                 scope_metrics: vec![],
             };
-            self.metrics_tx.send(Arc::new(vec![metrics]));
+            self.metrics_tx.send(vec![Arc::new(metrics)]);
             sequence_number += 1;
         }
         Ok(())
@@ -556,7 +556,7 @@ impl PipelineExecutor {
                 .remove(service_id)
                 .ok_or_else(|| eyre::eyre!("internal: missing service {service_id}"))?;
 
-            tracing::debug!("starting {:?}", pipeline_graph.node_weight(node_idx));
+            tracing::debug!("starting {}", node);
 
             let dependencies =
                 pipeline_graph.edges_directed(node_idx, petgraph::Direction::Outgoing);
@@ -593,8 +593,8 @@ impl PipelineExecutor {
         // wait for all tasks to complete
         while let Some(Ok((task_id, res))) = task_handles.next().await {
             match res {
-                Err(err) => tracing::error!("{task_id:?} exited with error: {err}"),
-                Ok(_) => tracing::warn!("{task_id:?} exited"),
+                Err(err) => tracing::error!("{task_id} exited with error: {err}"),
+                Ok(_) => tracing::warn!("{task_id} exited"),
             }
         }
 

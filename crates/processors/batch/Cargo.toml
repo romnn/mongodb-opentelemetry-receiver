@@ -24,26 +24,27 @@ keywords = [
 exclude = []
 
 [dependencies]
+otel-collector-component.workspace = true
+
 # utils
-color-eyre = "0"
-thiserror = "1"
-lazy_static = "1"
+color-eyre.workspace = true
+thiserror.workspace = true
+lazy_static.workspace = true
 # strum = { version = "0", features = ["derive"] }
 
 # tracing
-tracing = "0"
+tracing.workspace = true
 
 # config parsing
-serde = "1"
-serde_yaml = "0"
-duration-string = { version = "0", features = ["serde"] }
+serde.workspace = true
+serde_yaml.workspace = true
+duration-string.workspace = true
 
 # async
-async-trait = "0"
-futures = "0.3"
-pin-project = "1"
-tokio = { version = "1", features = ["full"] }
-tokio-stream = { version = "0", features = ["sync", "time"] }
+async-trait.workspace = true
+futures.workspace = true
+# pin-project = "1"
+tokio.workspace = true
+tokio-stream.workspace = true
 tokio-util = { version = "0", features = ["time"] }
 
-otel-collector-component = { path = "../../component" }

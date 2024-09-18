@@ -18,7 +18,8 @@ use tokio_stream::wrappers::BroadcastStream;
 ///
 /// `Arc` is used to make the payload `Clone`, which is required to broadcast the payload to
 /// multiple distinct nodes down the pipeline.
-pub type MetricPayload = Arc<Vec<ResourceMetrics>>;
+// pub type MetricPayload = Arc<Vec<ResourceMetrics>>;
+pub type MetricPayload = Vec<Arc<ResourceMetrics>>;
 pub type TracesPayload = String;
 pub type LogPayload = String;
 
@@ -55,7 +56,11 @@ pub enum ServiceIdentifier {
 
 impl std::fmt::Display for ServiceIdentifier {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        std::fmt::Debug::fmt(self, f)
+        match self {
+            Self::Receiver(id) => write!(f, "receiver::{id}"),
+            Self::Exporter(id) => write!(f, "exporter::{id}"),
+            Self::Processor(id) => write!(f, "processor::{id}"),
+        }
     }
 }
 

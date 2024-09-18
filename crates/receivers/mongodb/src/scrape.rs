@@ -162,7 +162,7 @@ impl MetricScraper {
             .run_command(bson::doc! { "ping": 1 })
             .await?;
 
-        tracing::info!(uri = options.connection_uri, "connected to database");
+        // tracing::info!(uri = options.connection_uri, "connected to database");
 
         Ok(Self {
             client,

@@ -11,3 +11,27 @@ resolver = "2"
 [profile.release]
 lto = true
 codegen-units = 1
+
+[workspace.dependencies]
+otel-collector-component = { path = "./crates/component" }
+
+# utils
+color-eyre = "0"
+thiserror = "1"
+lazy_static = "1"
+strum = { version = "0", features = ["derive"] }
+
+serde = { version = "1", features = ["derive"] }
+serde_yaml = "0"
+duration-string = { version = "0", features = ["serde"] }
+regex = "1"
+
+async-trait = "0"
+futures = "0.3"
+tokio = { version = "1", features = ["full"] }
+tokio-stream = { version = "0", features = ["sync", "time"] }
+
+opentelemetry = "0"
+opentelemetry_sdk = "0"
+
+tracing = "0"

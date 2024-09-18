@@ -17,16 +17,17 @@ receivers:
 processors:
   batch:
     send_batch_size: 10
-    timeout: 1s
+    timeout: 0s
+    send_queue_buffer_size: 2
 exporters:
   debug:
     verbosity: detailed
   otlp/2:
-    endpoint: localhost
+    endpoint: http://localhost:4317
     tls:
       insecure: true
   otlp:
-    endpoint: localhost
+    endpoint: http://localhost:4317
     tls:
       insecure: true
       # prometheus:

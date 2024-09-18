@@ -28,4 +28,6 @@ pub struct BatchProcessorConfig {
     /// When metadata_keys is not empty, this setting limits the number of unique combinations
     /// of metadata key values that will be processed over the lifetime of the process.
     pub metadata_cardinality_limit: Option<usize>,
+    /// Send queue buffer size
+    pub send_queue_buffer_size: Option<usize>,
 }

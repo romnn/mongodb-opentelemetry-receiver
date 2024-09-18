@@ -22,7 +22,7 @@ use std::sync::Arc;
 use std::time::{Instant, SystemTime};
 use tokio::sync::{broadcast, watch, Mutex};
 use tokio_stream::wrappers::BroadcastStream;
-use tracing::{debug, info, trace, warn};
+use tracing::{debug, error, info, trace, warn};
 
 pub const DEFAULT_PORT: u16 = 27017;
 
@@ -191,11 +191,12 @@ impl otel_collector_component::Receiver for Receiver {
             };
             match self.scraper.scrape().await {
                 Ok(metrics) => {
-                    info!("mongodb scraped {} metrics", metrics.len());
-                    self.metrics_tx.send(Arc::new(metrics));
+                    trace!("mongodb scraped {} metrics", metrics.len());
+                    self.metrics_tx
+                        .send(metrics.into_iter().map(Arc::new).collect());
                 }
                 Err(err) => {
-                    warn!("error scraping metrics: {}", err);
+                    error!("error scraping metrics: {}", err);
                 }
             };
         }

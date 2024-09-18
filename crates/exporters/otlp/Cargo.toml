@@ -24,30 +24,41 @@ keywords = [
 exclude = []
 
 [dependencies]
+otel-collector-component.workspace = true
+
 # utils
-color-eyre = "0"
-thiserror = "1"
-lazy_static = "1"
-# strum = { version = "0", features = ["derive"] }
+color-eyre.workspace = true
+thiserror.workspace = true
+lazy_static.workspace = true
 
 # config parsing
-serde = "1"
-serde_yaml = "0"
-duration-string = { version = "0", features = ["serde"] }
+serde.workspace = true
+serde_yaml.workspace = true
+duration-string.workspace = true
 
 # async
-async-trait = "0"
-futures = "0.3"
-tokio = { version = "1", features = ["full"] }
-tokio-stream = { version = "0", features = ["sync", "time"] }
+async-trait.workspace = true
+futures.workspace = true
+tokio.workspace = true
+tokio-stream.workspace = true
 
 # telemetry
-tracing = "0"
+tracing.workspace = true
 
 # otlp
-opentelemetry = "0"
-opentelemetry-otlp = { version = "0", features = ["grpc-tonic", "gzip-tonic", "trace", "metrics", "logs", "tls" ] }
-opentelemetry_sdk = "0"
+opentelemetry.workspace = true
+opentelemetry_sdk.workspace = true
+opentelemetry-proto = { version = "0" }
 tonic = "0"
 
-otel-collector-component = { path = "../../component" }
+[dependencies.opentelemetry-otlp]
+version = "0"
+features = [
+	"grpc-tonic",
+	"zstd-tonic",
+	"gzip-tonic",
+	"trace",
+	"metrics",
+	"logs",
+	"tls",
+]

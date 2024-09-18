@@ -10,8 +10,8 @@ use otel_collector_component::{MetricPayload, MetricsStream, ServiceIdentifier};
 use std::collections::{HashMap, HashSet};
 use std::time::Duration;
 use tokio::sync::{broadcast, watch};
-use tokio_stream::wrappers::BroadcastStream;
-use tracing::{info, trace, warn};
+use tokio_stream::wrappers::{errors::BroadcastStreamRecvError, BroadcastStream};
+use tracing::{error, info, trace, warn};
 
 pub const DEFAULT_BUFFER_SIZE: usize = 1024;
 
@@ -233,9 +233,9 @@ impl BatchProcessor {
             send_batch_size = None;
         }
 
-        dbg!(&send_batch_size);
-        dbg!(&send_batch_max_size);
-        dbg!(&timeout);
+        // dbg!(&send_batch_size);
+        // dbg!(&send_batch_max_size);
+        // dbg!(&timeout);
 
         // create single or multi shard batcher
         // let batcher = Shard {};
@@ -251,7 +251,8 @@ impl BatchProcessor {
         //     })
         // };
         // bpt, err := newBatchProcessorTelemetry(set, bp.batcher.currentMetadataCardinality)
-        let (metrics_tx, _) = broadcast::channel(DEFAULT_BUFFER_SIZE);
+        let queue_buffer_size = config.send_queue_buffer_size.unwrap_or(DEFAULT_BUFFER_SIZE);
+        let (metrics_tx, _) = broadcast::channel(queue_buffer_size);
 
         // let timer = match timeout {
         //     Some(deadline) => Timer::finite(deadline),
@@ -272,25 +273,48 @@ impl BatchProcessor {
 
     // async fn send_items(&mut self, trigger: Trigger) {
     async fn send_items(&mut self, items: Vec<MetricPayload>, trigger: Trigger) {
-        warn!(
-            ?trigger,
-            current_batch_size = self.current_batch_size(),
-            "TODO: send batch"
+        // async fn send_items(&mut self, items: MetricPayload, trigger: Trigger) {
+        // warn!(
+        //     ?trigger,
+        //     current_batch_size = self.current_batch_size(),
+        //     "TODO: send batch"
+        // );
+        let combined_batch: Vec<_> = items.into_iter().flat_map(|metrics| metrics).collect();
+        trace!(
+            batch_size = combined_batch.len(),
+            "{} sending batch",
+            self.id
         );
+        if let Err(err) = self.metrics_tx.send(combined_batch) {
+            error!("failed to send metrics: {err}");
+        }
+        //     items
+        //         .into_iter()
+        //         .flat_map(|metrics| std::sync::Arc::unwrap_or_clone(metrics)),
+        // );
     }
 
     fn current_batch_size(&self) -> usize {
         self.current_batch.len()
     }
 
+    fn reset_deadline(&mut self) {
+        if let Some(deadline) = self.timeout {
+            self.deadlines.insert((), deadline);
+        }
+    }
+
     async fn process_item(
         &mut self,
         from: ServiceIdentifier,
-        payload: Result<MetricPayload, tokio_stream::wrappers::errors::BroadcastStreamRecvError>,
+        payload: Result<MetricPayload, BroadcastStreamRecvError>,
     ) {
-        let Ok(resource_metrics) = payload else {
-            warn!("no payload");
-            return;
+        let resource_metrics = match payload {
+            Ok(metrics) => metrics,
+            Err(BroadcastStreamRecvError::Lagged(num_skipped)) => {
+                warn!("skipped {num_skipped} messages");
+                return;
+            }
         };
         // self.current_batch_size += resource_metrics.len();
         self.current_batch.push(resource_metrics);
@@ -315,10 +339,7 @@ impl BatchProcessor {
         }
         if did_send {
             // reset deadline
-            if let Some(deadline) = self.timeout {
-                self.deadlines.insert((), deadline);
-            }
-            // self.timer.reset();
+            self.reset_deadline();
         }
 
         // match self.batcher {
@@ -342,28 +363,23 @@ impl otel_collector_component::Processor for BatchProcessor {
         mut shutdown_rx: watch::Receiver<bool>,
         mut metrics: MetricsStream,
     ) -> eyre::Result<()> {
-        if let Some(deadline) = self.timeout {
-            self.deadlines.insert((), deadline);
-        }
+        self.reset_deadline();
+        // if let Some(deadline) = self.timeout {
+        //     self.deadlines.insert((), deadline);
+        // }
         loop {
-            // let (from, resource_metrics) = tokio::select! {
-            // TODO: the main loop with the tokio timer delay stuff should be for a shard
-            // let mut reset_timer = false;
-            // _ = &mut self.timer => {
             tokio::select! {
                 _ = self.deadlines.next() => {
-                    trace!("batch timer expired, sending {} metrics", 0);
                     let idx = self
                         .current_batch
                         .len()
                         .min(self.send_batch_max_size.unwrap_or(usize::MAX));
-                    let items = self.current_batch.drain(..idx).collect();
-                    self.send_items(items, Trigger::Timeout).await;
-                    // reset deadline
-                    if let Some(deadline) = self.timeout {
-                        self.deadlines.insert((), deadline);
+                    if idx > 0 {
+                        let items: Vec<_> = self.current_batch.drain(..idx).collect();
+                        trace!(batch_size = items.len(), "batch timer expired");
+                        self.send_items(items, Trigger::Timeout).await;
                     }
-                    // self.timer.reset();
+                    self.reset_deadline();
                 },
                 Some((from, payload)) = metrics.next() => {
                     trace!("batch received payload");
