@@ -1,15 +1,9 @@
 [package]
 name = "otel-collector"
-version = "0.1.0"
-edition = "2021"
 publish = true
 authors = ["romnn <contact@romnn.com>"]
 description = "Opentelemetry (OTEL) collector"
-license-file = "../../LICENSE"
 readme = "./README.md"
-documentation = "https://docs.rs/nvbit-rs"
-homepage = "https://github.com/romnn/nvbit-rs"
-repository = "https://github.com/romnn/nvbit-rs"
 categories = [
 	"api-bindings",
 	"asynchronous",
@@ -22,6 +16,16 @@ keywords = [
 	"telemetry",
 ]
 exclude = []
+
+version.workspace = true
+edition.workspace = true
+license-file.workspace = true
+documentation.workspace = true
+homepage.workspace = true
+repository.workspace = true
+
+[package.metadata.cargo-feature-combinations]
+denylist = ["default", "full"]
 
 [features]
 default = ["full"]

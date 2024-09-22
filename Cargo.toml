@@ -8,6 +8,14 @@ members = [
 ]
 resolver = "2"
 
+[workspace.package]
+version = "0.0.1"
+edition = "2021"
+license-file = "./LICENSE"
+documentation = "https://docs.rs/nvbit-rs"
+homepage = "https://github.com/romnn/nvbit-rs"
+repository = "https://github.com/romnn/nvbit-rs"
+
 [profile.release]
 lto = true
 codegen-units = 1

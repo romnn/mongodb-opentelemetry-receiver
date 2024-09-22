@@ -1,0 +1,78 @@
+name: build
+on: [push, pull_request]
+jobs:
+  package-matrix:
+    uses: ./.github/workflows/package-matrix.yml
+  build:
+    runs-on: ubuntu-latest
+    needs: [package-matrix]
+    strategy:
+      fail-fast: false
+      matrix:
+        package: ${{ fromJson(needs.package-matrix.outputs.matrix) }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: romnn/cargo-feature-combinations@main
+      - name: Build
+        run: >
+          cargo fc build --package "${{ matrix.package.name }}" --all-targets
+
+  all-in-one:
+    runs-on: ${{ matrix.target.os }}
+    name: build ${{ matrix.bin }} (${{ matrix.target.arch }})
+    strategy:
+      fail-fast: false
+      matrix:
+        bin:
+          - otel-collector
+        target:
+          # linux aarch64
+          - os: ubuntu-latest
+            arch: aarch64-unknown-linux-gnu
+          - os: ubuntu-latest
+            arch: aarch64-unknown-linux-musl
+          # linux armv7
+          - os: ubuntu-latest
+            arch: armv7-unknown-linux-musleabihf
+          # linux i686
+          - os: ubuntu-latest
+            arch: i686-unknown-linux-gnu
+          - os: ubuntu-latest
+            arch: i686-unknown-linux-musl
+          # linux arm
+          - os: ubuntu-latest
+            arch: arm-unknown-linux-gnueabi
+          - os: ubuntu-latest
+            arch: arm-unknown-linux-gnueabihf
+          # linux x86
+          - os: ubuntu-latest
+            arch: x86_64-unknown-linux-gnu
+          - os: ubuntu-latest
+            arch: x86_64-unknown-linux-musl
+          # apple
+          - os: macos-latest
+            arch: x86_64-apple-darwin
+          - os: macos-latest
+            arch: aarch64-apple-darwin
+          # windows
+          - os: windows-latest
+            arch: x86_64-pc-windows-gnu
+          - os: windows-latest
+            arch: x86_64-pc-windows-msvc
+          - os: windows-latest
+            arch: i686-pc-windows-msvc
+    steps:
+      - uses: actions/checkout@v4
+      - id: query
+        uses: romnn/query-git-action@main
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target.arch }}
+      - name: Build ${{ matrix.bin }} (${{ matrix.target.arch }})
+        uses: actions-rs/cargo@v1
+        with:
+          use-cross: ${{ contains(matrix.target.os, 'ubuntu') }}
+          command: build
+          args: >-
+            --bin ${{ matrix.bin }} --target ${{ matrix.target.arch }}

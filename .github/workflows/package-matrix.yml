@@ -1,0 +1,22 @@
+name: package-matrix
+on:
+  workflow_call:
+    outputs:
+      matrix:
+        description: "the packages matrix"
+        value: ${{ jobs.matrix.outputs.matrix }}
+jobs:
+  matrix:
+    name: Generate feature matrix
+    runs-on: ubuntu-latest
+    outputs:
+      matrix: ${{ steps.compute-matrix.outputs.matrix }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: romnn/cargo-feature-combinations@main
+      - name: Compute feature matrix
+        id: compute-matrix
+        run: |
+          cargo fc matrix --pretty --packages-only
+          matrix="$(cargo fc matrix --packages-only)"
+          echo "matrix=$matrix" >> "$GITHUB_OUTPUT"
