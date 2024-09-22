@@ -1402,7 +1402,7 @@ dependencies = [
 
 [[package]]
 name = "otel-batch-processor"
-version = "0.0.1"
+version = "0.0.2"
 dependencies = [
  "async-trait",
  "color-eyre",
@@ -1421,7 +1421,7 @@ dependencies = [
 
 [[package]]
 name = "otel-collector"
-version = "0.0.1"
+version = "0.0.2"
 dependencies = [
  "atty",
  "clap",
@@ -1441,7 +1441,7 @@ dependencies = [
 
 [[package]]
 name = "otel-collector-component"
-version = "0.0.1"
+version = "0.0.2"
 dependencies = [
  "async-trait",
  "color-eyre",
@@ -1462,7 +1462,7 @@ dependencies = [
 
 [[package]]
 name = "otel-mongodb-receiver"
-version = "0.0.1"
+version = "0.0.2"
 dependencies = [
  "async-trait",
  "color-eyre",
@@ -1485,7 +1485,7 @@ dependencies = [
 
 [[package]]
 name = "otel-otlp-exporter"
-version = "0.0.1"
+version = "0.0.2"
 dependencies = [
  "async-trait",
  "color-eyre",

@@ -9,7 +9,7 @@ use std::path::PathBuf;
 use tracing::{info, warn};
 use tracing_subscriber::layer::SubscriberExt;
 
-pub const APPLICATION_NAME: &'static str = "mongodb-opentelemetry-receiver";
+pub const APPLICATION_NAME: &'static str = "otel-collector";
 
 #[derive(Debug, Clone, Copy, Hash, PartialEq, Eq, PartialOrd, Ord)]
 pub enum LogFormat {
@@ -161,12 +161,22 @@ async fn main() -> eyre::Result<()> {
         otel_collector_component::config::Config::default()
     };
 
-    let pipelines = PipelineBuilder::new()
-        .with_receiver(otel_mongodb_receiver::Factory::default())
-        .with_processors([Box::new(otel_batch_processor::Factory::default()) as _])
-        .with_exporter(otel_otlp_exporter::Factory::default())
-        .build(config)
-        .await?;
+    let mut pipelines = PipelineBuilder::new();
+
+    #[cfg(feature = "mongodb")]
+    {
+        pipelines = pipelines.with_receiver(otel_mongodb_receiver::Factory::default());
+    }
+    #[cfg(feature = "batch")]
+    {
+        pipelines = pipelines.with_processor(otel_batch_processor::Factory::default());
+    }
+    #[cfg(feature = "otlp-exporter")]
+    {
+        pipelines = pipelines.with_exporter(otel_otlp_exporter::Factory::default());
+    }
+
+    let pipelines = pipelines.build(config).await?;
 
     let pipeline_executor = otel_collector_component::pipeline::PipelineExecutor { pipelines };
     pipeline_executor.start(shutdown_rx).await?;
