@@ -7,14 +7,14 @@ on:
         value: ${{ jobs.matrix.outputs.matrix }}
 jobs:
   matrix:
-    name: Generate feature matrix
+    name: Generate package matrix
     runs-on: ubuntu-latest
     outputs:
       matrix: ${{ steps.compute-matrix.outputs.matrix }}
     steps:
       - uses: actions/checkout@v4
       - uses: romnn/cargo-feature-combinations@main
-      - name: Compute feature matrix
+      - name: Compute package matrix
         id: compute-matrix
         run: |
           cargo fc matrix --pretty --packages-only

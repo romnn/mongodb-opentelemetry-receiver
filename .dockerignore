@@ -1,0 +1,16 @@
+TODO.md
+README.md
+LICENSE
+Dockerfile*
+.ignore
+.gitignore
+.bumpversion
+.DS_Store
+target/
+
+*
+
+!/Cargo.toml
+!/Cargo.lock
+!/bin/**/*
+!/crates/**/*

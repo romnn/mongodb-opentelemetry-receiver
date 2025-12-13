@@ -1,0 +1,32 @@
+# FROM rust:1.81 as base
+FROM clux/muslrust:stable AS chef
+USER root
+RUN cargo install cargo-chef
+WORKDIR /app
+
+FROM chef AS planner
+COPY . .
+# COPY ./Cargo.toml ./Cargo.lock ./
+# COPY ./src ./src
+RUN cargo chef prepare --recipe-path recipe.json
+
+FROM chef AS builder
+COPY --from=planner /app/recipe.json recipe.json
+RUN cargo chef cook \
+	--target aarch64-unknown-linux-musl \
+	# --target x86_64-unknown-linux-musl \
+	--recipe-path recipe.json
+# --release
+COPY . .
+RUN cargo build \
+	-p otel-collector \
+	--target aarch64-unknown-linux-musl
+	# --target x86_64-unknown-linux-musl
+# --release
+# RUN mv ./target/release/otel-collector ./otel-collector
+
+FROM scratch AS runtime
+WORKDIR /app
+# COPY --from=builder /app/target/x86_64-unknown-linux-musl/debug/otel-collector /usr/local/bin/
+COPY --from=builder /app/target/aarch64-unknown-linux-musl/debug/otel-collector /usr/local/bin/
+ENTRYPOINT ["/usr/local/bin/otel-collector"]

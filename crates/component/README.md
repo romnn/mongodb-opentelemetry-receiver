@@ -1,0 +1,3 @@
+## otel collector component
+
+TODO
